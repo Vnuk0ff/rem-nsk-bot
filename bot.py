@@ -265,6 +265,7 @@ async def show_price(message: Message):
         reply_markup=kb
     )
 
+# --- ИСТОРИЯ ЗАКАЗОВ КЛИЕНТА (С КНОПКАМИ ГАРАНТИИ И НОВОЙ ЗАЯВКИ) ---
 @router.message(F.text == "📜 Мои заказы")
 async def show_user_orders(message: Message):
     orders = get_user_orders(message.from_user.id)
@@ -286,6 +287,7 @@ async def show_user_orders(message: Message):
             text += f"💰 Сумма: {price} руб.\n"
             text += f"🔧 Работы: {details}\n"
         
+        markup = None
         if status == "Оплачено / Выполнено" and completed_at:
             rem_days, total_days = calculate_warranty_days(completed_at, period)
             text += (
@@ -295,8 +297,82 @@ async def show_user_orders(message: Message):
                 f"⏳ **Осталось дней гарантии: {rem_days} из {total_days} дн.**\n"
                 f"🟢 Статус: Действует\n"
             )
+            markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🛡 Обратиться по гарантии", callback_data=f"warranty_claim_{o_id}")],
+                [InlineKeyboardButton(text="🛠 Создать новую заявку", callback_data="new_order_from_history")]
+            ])
+        
         text += "-------------------------\n"
-        await message.answer(text, parse_mode="Markdown")
+        if markup:
+            await message.answer(text, reply_markup=markup, parse_mode="Markdown")
+        else:
+            await message.answer(text, parse_mode="Markdown")
+
+@router.callback_query(F.data.startswith("warranty_claim_"))
+async def warranty_claim_callback(callback: CallbackQuery):
+    order_id = callback.data.split("_")[2]
+    order = get_order_by_id(order_id)
+    user = callback.from_user
+    
+    completed_date = order[12]
+    period = order[10]
+    rem_days, total_days = calculate_warranty_days(completed_date, period)
+
+    # Уведомление мастеру (админу)
+    admin_claim_text = (
+        f"🚨 **ОБРАЩЕНИЕ ПО ГАРАНТИИ!**\n\n"
+        f"🆔 Заказ №{order_id}\n"
+        f"👤 Клиент: {user.first_name} (@{user.username if user.username else 'нет'})\n"
+        f"📞 Контакт: {order[7]}\n"
+        f"🏷 Марка: {order[4]}\n"
+        f"🔧 Выполненные ранее работы: {order[11]}\n"
+        f"🛡 Срок гарантии: {period} (Осталось дней: {rem_days} из {total_days})"
+    )
+    
+    confirm_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Подтвердить получение (связаться)", callback_data=f"confirm_claim_{order_id}_{user.id}")]
+    ])
+
+    try:
+        await bot.send_message(chat_id=ADMIN_ID, text=admin_claim_text, reply_markup=confirm_markup, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Failed to send warranty claim to admin: {e}")
+
+    await callback.message.edit_text(
+        text=callback.message.text + "\n\n⏳ **Запрос по гарантии отправлен мастеру!** Ожидайте, мастер свяжется с вами.",
+        parse_mode="Markdown"
+    )
+    await callback.answer("Запрос по гарантии отправлен!")
+
+@router.callback_query(F.data.startswith("confirm_claim_"))
+async def admin_confirm_claim(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    parts = callback.data.split("_")
+    order_id = parts[2]
+    user_id = int(parts[3])
+
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text=f"🟢 **Мастер успешно уведомлен о вашем обращении по гарантии (Заказ №{order_id})!**\nОн свяжется с вами в ближайшее время.",
+            parse_mode="Markdown"
+        )
+        await callback.message.edit_text(text=callback.message.text + "\n\n✅ Уведомление клиенту отправлено!")
+    except Exception as e:
+        await callback.message.answer(f"Не удалось отправить уведомление клиенту: {e}")
+
+    await callback.answer("Подтверждено!")
+
+@router.callback_query(F.data == "new_order_from_history")
+async def callback_new_order(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("Давайте оформим новую заявку.")
+    await start_order_by_callback(callback.message, state)
+    await callback.answer()
+
+async def start_order_by_callback(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.waiting_for_district)
+    await message.answer("Шаг 1 из 5: Выберите ваш район города (или область):", reply_markup=districts_keyboard)
 
 @router.message(F.text == "📊 Управление заказами (Админ)")
 async def admin_orders_menu(message: Message):
@@ -489,7 +565,6 @@ async def process_contact_text(message: Message, state: FSMContext):
     await state.update_data(contact=contact)
     await show_preview(message, state)
 
-# --- ПРЕДПРОСМОТР ЗАЯВКИ ПЕРЕД ОТПРАВКОЙ ---
 async def show_preview(message: Message, state: FSMContext):
     await state.set_state(RepairOrder.preview_order)
     data = await state.get_data()
