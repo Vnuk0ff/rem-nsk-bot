@@ -1,20 +1,52 @@
 import asyncio
 import logging
 import os
+import sqlite3
 from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import CommandStart
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import (
+    Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, 
+    ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+)
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
 TOKEN = "9255429964:AAGPJ8k9el502n_D8QX0SmpmJYvD5G-Pqmw"
 ADMIN_ID = 6684594078
+DB_NAME = "service_bot.db"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
 
+# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ---
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            user_name TEXT,
+            district TEXT,
+            brand TEXT,
+            issue TEXT,
+            photo TEXT,
+            contact TEXT,
+            status TEXT DEFAULT 'Новая',
+            price TEXT DEFAULT '',
+            warranty_period TEXT DEFAULT '',
+            work_details TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# --- СОСТОЯНИЯ FSM ---
 class RepairOrder(StatesGroup):
     waiting_for_district = State()
     waiting_for_brand = State()
@@ -24,10 +56,18 @@ class RepairOrder(StatesGroup):
     waiting_for_photo = State()
     waiting_for_contact = State()
 
+class AdminWarrantyFill(StatesGroup):
+    waiting_for_order_id = State()
+    waiting_for_price = State()
+    waiting_for_period = State()
+    waiting_for_details = State()
+
+# --- КЛАВИАТУРЫ ---
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🛠 Оставить заявку"), KeyboardButton(text="💰 Прайс")],
-        [KeyboardButton(text="ℹ️ О нас"), KeyboardButton(text="🔄 В начало")]
+        [KeyboardButton(text="🛠 Оставить заявку"), KeyboardButton(text="📜 Мои заказы")],
+        [KeyboardButton(text="💰 Прайс"), KeyboardButton(text="ℹ️ О нас")],
+        [KeyboardButton(text="🔄 В начало")]
     ],
     resize_keyboard=True
 )
@@ -80,6 +120,54 @@ contact_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+# --- ВПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БД ---
+def save_order(user_id, user_name, district, brand, issue, photo, contact):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO orders (user_id, user_name, district, brand, issue, photo, contact)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (user_id, user_name, district, brand, issue, photo, contact))
+    order_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return order_id
+
+def get_user_orders(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, brand, issue, status, price, warranty_period, work_details FROM orders WHERE user_id = ? ORDER BY id DESC', (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def get_order_by_id(order_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, user_id, user_name, district, brand, issue, photo, contact, status, price, warranty_period, work_details FROM orders WHERE id = ?', (order_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row
+
+def update_order_status(order_id, status):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('UPDATE orders SET status = ? WHERE id = ?', (status, order_id))
+    conn.commit()
+    conn.close()
+
+def update_order_warranty(order_id, price, period, details):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE orders 
+        SET price = ?, warranty_period = ?, work_details = ?, status = 'Ожидает оплаты' 
+        WHERE id = ?
+    ''', (price, period, details, order_id))
+    conn.commit()
+    conn.close()
+
+# --- ОБРАБОТЧИКИ КОМАНД И МЕНЮ ---
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
@@ -109,32 +197,48 @@ async def about_us(message: Message):
 @router.message(F.text == "💰 Прайс")
 async def show_price(message: Message):
     await message.answer(
-        "💰 **Прайс-лист на ремонт стиральных машин**\n\n"
+        "💰 Прайс-лист на ремонт стиральных машин\n\n"
         "Здесь скоро появится актуальный прайс на услуги.\n"
         "По вопросам стоимости вы всегда можете проконсультироваться у мастера: @za_russia_ru",
         reply_markup=main_keyboard
     )
 
+# --- ИСТОРИЯ ЗАКАЗОВ ДЛЯ КЛИЕНТА ---
+@router.message(F.text == "📜 Мои заказы")
+async def show_user_orders(message: Message):
+    orders = get_user_orders(message.from_user.id)
+    if not orders:
+        await message.answer("У вас пока нет активных или выполненных заказов.", reply_markup=main_keyboard)
+        return
+
+    text = "📜 Ваши заказы:\n\n"
+    for order in orders:
+        o_id, brand, issue, status, price, period, details = order
+        text += f"🔹 Заказ №{o_id} ({brand})\n"
+        text += f"   Проблема: {issue}\n"
+        text += f"   Статус: {status}\n"
+        if price:
+            text += f"   Сумма: {price} руб.\n"
+        if period:
+            text += f"   Гарантия: {period}\n"
+        text += "-------------------------\n"
+    
+    await message.answer(text, reply_markup=main_keyboard)
+
+# --- ЛОГИКА СОЗДАНИЯ ЗАЯВКИ ---
 @router.message(F.text == "🛠 Оставить заявку")
 async def start_order(message: Message, state: FSMContext):
     await state.set_state(RepairOrder.waiting_for_district)
-    await message.answer(
-        "Выберите ваш район города (или область):",
-        reply_markup=districts_keyboard
-    )
+    await message.answer("Выберите ваш район города (или область):", reply_markup=districts_keyboard)
 
 @router.message(RepairOrder.waiting_for_district)
 async def process_district(message: Message, state: FSMContext):
     if message.text == "🔄 В начало":
         await cmd_start(message, state)
         return
-    
     await state.update_data(district=message.text)
     await state.set_state(RepairOrder.waiting_for_brand)
-    await message.answer(
-        "Выберите марку вашей стиральной машины из списка или нажмите «✍️ Другая марка»:",
-        reply_markup=brands_keyboard
-    )
+    await message.answer("Выберите марку вашей стиральной машины из списка или нажмите «✍️ Другая марка»:", reply_markup=brands_keyboard)
 
 @router.message(RepairOrder.waiting_for_brand, F.text == "✍️ Другая марка")
 async def custom_brand_prompt(message: Message, state: FSMContext):
@@ -146,7 +250,6 @@ async def process_brand_choice(message: Message, state: FSMContext):
     if message.text == "🔄 В начало":
         await cmd_start(message, state)
         return
-    
     await state.update_data(brand=message.text)
     await state.set_state(RepairOrder.waiting_for_issue)
     await message.answer("Выберите проблему из списка или нажмите «✍️ Своя проблема»:", reply_markup=issues_keyboard)
@@ -156,7 +259,6 @@ async def process_custom_brand(message: Message, state: FSMContext):
     if message.text == "🔄 В начало":
         await cmd_start(message, state)
         return
-    
     await state.update_data(brand=message.text)
     await state.set_state(RepairOrder.waiting_for_issue)
     await message.answer("Выберите проблему из списка или нажмите «✍️ Своя проблема»:", reply_markup=issues_keyboard)
@@ -171,52 +273,31 @@ async def process_issue_choice(message: Message, state: FSMContext):
     if message.text == "🔄 В начало":
         await cmd_start(message, state)
         return
-    
     await state.update_data(issue=message.text)
     await state.set_state(RepairOrder.waiting_for_photo)
-    await message.answer(
-        "Если есть возможность, отправьте фото поломки или панели машины (или нажмите «Пропустить фото»):",
-        reply_markup=skip_keyboard
-    )
+    await message.answer("Если есть возможность, отправьте фото поломки или панели машины (или нажмите «Пропустить фото»):", reply_markup=skip_keyboard)
 
 @router.message(RepairOrder.waiting_for_custom_issue)
 async def process_custom_issue(message: Message, state: FSMContext):
     if message.text == "🔄 В начало":
         await cmd_start(message, state)
         return
-    
     await state.update_data(issue=message.text)
     await state.set_state(RepairOrder.waiting_for_photo)
-    await message.answer(
-        "Если есть возможность, отправьте фото поломки или панели машины (или нажмите «Пропустить фото»):",
-        reply_markup=skip_keyboard
-    )
+    await message.answer("Если есть возможность, отправьте фото поломки или панели машины (или нажмите «Пропустить фото»):", reply_markup=skip_keyboard)
 
 @router.message(RepairOrder.waiting_for_photo, F.photo)
 async def process_photo(message: Message, state: FSMContext):
     photo_id = message.photo[-1].file_id
     await state.update_data(photo=photo_id)
     await state.set_state(RepairOrder.waiting_for_contact)
-    await message.answer(
-        "Пожалуйста, поделитесь контактом в один клик или введите номер телефона вручную:",
-        reply_markup=contact_keyboard
-    )
+    await message.answer("Пожалуйста, поделитесь контактом в один клик или введите номер телефона вручную:", reply_markup=contact_keyboard)
 
 @router.message(RepairOrder.waiting_for_photo, F.text == "Пропустить фото")
 async def skip_photo(message: Message, state: FSMContext):
     await state.update_data(photo=None)
     await state.set_state(RepairOrder.waiting_for_contact)
-    await message.answer(
-        "Пожалуйста, поделитесь контактом в один клик или введите номер телефона вручную:",
-        reply_markup=contact_keyboard
-    )
-
-@router.message(RepairOrder.waiting_for_photo)
-async def wrong_photo_format(message: Message, state: FSMContext):
-    if message.text == "🔄 В начало":
-        await cmd_start(message, state)
-        return
-    await message.answer("Пожалуйста, отправьте фотографию или нажмите «Пропустить фото».")
+    await message.answer("Пожалуйста, поделитесь контактом в один клик или введите номер телефона вручную:", reply_markup=contact_keyboard)
 
 @router.message(RepairOrder.waiting_for_contact, F.contact)
 async def process_contact_button(message: Message, state: FSMContext):
@@ -241,8 +322,10 @@ async def finalize_order(message: Message, state: FSMContext, contact: str):
     user = message.from_user
     username = f"@{user.username}" if user.username else "нет username"
 
+    order_id = save_order(user.id, user.first_name, district, brand, issue, photo, contact)
+
     admin_text = (
-        f"🚨 Новая заявка на ремонт!\n\n"
+        f"🚨 Новая заявка №{order_id}!\n\n"
         f"📍 Район: {district}\n"
         f"🏷 Марка: {brand}\n"
         f"⚠️ Проблема: {issue}\n"
@@ -250,11 +333,17 @@ async def finalize_order(message: Message, state: FSMContext, contact: str):
         f"👤 Клиент: {user.first_name} ({username})"
     )
 
+    admin_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📞 Созвон", callback_data=f"status_{order_id}_Созвон"),
+         InlineKeyboardButton(text="🛠 В работе", callback_data=f"status_{order_id}_В работе")],
+        [InlineKeyboardButton(text="📋 Выписать гарантию / счет", callback_data=f"fill_warranty_{order_id}")]
+    ])
+
     try:
         if photo:
-            await bot.send_photo(chat_id=ADMIN_ID, photo=photo, caption=admin_text)
+            await bot.send_photo(chat_id=ADMIN_ID, photo=photo, caption=admin_text, reply_markup=admin_markup)
         else:
-            await bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+            await bot.send_message(chat_id=ADMIN_ID, text=admin_text, reply_markup=admin_markup)
     except Exception as e:
         logging.error(f"Failed to send order to admin: {e}")
 
@@ -264,8 +353,106 @@ async def finalize_order(message: Message, state: FSMContext, contact: str):
     )
     await state.clear()
 
+# --- ОБРАБОТЧИКИ АДМИН-ДЕЙСТВИЙ И ГАРАНТИИ ---
+@router.callback_query(F.data.startswith("status_"))
+async def change_status_callback(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    _, order_id, new_status = callback.data.split("_")
+    update_order_status(order_id, new_status)
+    await callback.answer(f"Статус заказа №{order_id} изменен на: {new_status}")
+    await callback.message.edit_caption(caption=callback.message.caption + f"\n\n📌 Статус: {new_status}") if callback.message.photo else await callback.message.edit_text(text=callback.message.text + f"\n\n📌 Статус: {new_status}")
+
+@router.callback_query(F.data.startswith("fill_warranty_"))
+async def start_fill_warranty(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    order_id = callback.data.split("_")[2]
+    await state.update_data(warranty_order_id=order_id)
+    await state.set_state(AdminWarrantyFill.waiting_for_price)
+    await callback.message.answer(f"Заполнение гарантии для заказа №{order_id}.\nВведите итоговую стоимость ремонта (руб):")
+    await callback.answer()
+
+@router.message(AdminWarrantyFill.waiting_for_price)
+async def process_warranty_price(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.update_data(price=message.text)
+    await state.set_state(AdminWarrantyFill.waiting_for_period)
+    await message.answer("Укажите срок гарантии (например: 6 месяцев, 1 год):")
+
+@router.message(AdminWarrantyFill.waiting_for_period)
+async def process_warranty_period(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.update_data(period=message.text)
+    await state.set_state(AdminWarrantyFill.waiting_for_details)
+    await message.answer("Опишите выполненные работы (например: Замена сливного насоса):")
+
+@router.message(AdminWarrantyFill.waiting_for_details)
+async def process_warranty_details(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    order_id = data.get("warranty_order_id")
+    price = data.get("price")
+    period = data.get("period")
+    details = message.text
+
+    update_order_warranty(order_id, price, period, details)
+    order = get_order_by_id(order_id)
+    user_id = order[1]
+
+    # Кнопки оплаты для клиента
+    payment_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Оплатить по СБП", url=f"https://qr.nspk.ru/")], # Ссылка или перевод
+        [InlineKeyboardButton(text="✅ Подтвердить оплату мастеру", callback_data=f"confirm_pay_{order_id}")]
+    ])
+
+    bill_text = (
+        f"🧾 **Счет и гарантия по заказу №{order_id}**\n\n"
+        f"🔧 Выполненные работы: {details}\n"
+        f"🛡 Срок гарантии: {period}\n"
+        f"💰 К оплате: {price} руб.\n\n"
+        f"Вы можете перевести сумму мастеру по СБП (на номер +79538043048) или оплатить наличными/переводом на месте."
+    )
+
+    try:
+        await bot.send_message(chat_id=user_id, text=bill_text, reply_markup=payment_markup)
+        await message.answer(f"✅ Счет и гарантия успешно отправлены клиенту по заказу №{order_id}!")
+    except Exception as e:
+        await message.answer(f"Ошибка при отправке клиенту: {e}")
+
+    await state.clear()
+
+@router.callback_query(F.data.startswith("confirm_pay_"))
+async def user_confirm_pay(callback: CallbackQuery):
+    order_id = callback.data.split("_")[2]
+    order = get_order_by_id(order_id)
+    
+    update_order_status(order_id, "Оплачено / Выполнено")
+
+    warranty_ticket = (
+        f"📜 **ОФИЦИАЛЬНЫЙ ЭЛЕКТРОННЫЙ ГАРАНТИЙНЫЙ ТАЛОН**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Заказ №: {order_id}\n"
+        f"Марка: {order[4]}\n"
+        f"Работы: {order[11]}\n"
+        f"Сумма: {order[9]} руб.\n"
+        f"Гарантия: {order[10]}\n"
+        f"Статус: 🟢 ОПЛАЧЕНО И ПОДТВЕРЖДЕНО\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Мастер: Николай (+7 953 804 3048)\n"
+        f"Сохраните этот чек. По вопросам гарантии обращайтесь в бот или по телефону."
+    )
+
+    await callback.message.answer(warranty_ticket)
+    await bot.send_message(chat_id=ADMIN_ID, text=f"🎉 Клиент подтвердил оплату по заказу №{order_id} ({order[9]} руб.)!")
+    await callback.answer()
+
 dp.include_router(router)
 
+# --- ВЕБ-СЕРВЕР РЕНДЕР ---
 async def handle(request):
     return web.Response(text="Bot is running!")
 
