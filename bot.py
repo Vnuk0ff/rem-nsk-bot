@@ -55,6 +55,7 @@ class RepairOrder(StatesGroup):
     waiting_for_custom_issue = State()
     waiting_for_photo = State()
     waiting_for_contact = State()
+    preview_order = State()
 
 class AdminWarrantyFill(StatesGroup):
     waiting_for_order_id = State()
@@ -89,7 +90,8 @@ districts_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="Советский"), KeyboardButton(text="Ленинский")],
         [KeyboardButton(text="Кировский"), KeyboardButton(text="Дзержинский")],
         [KeyboardButton(text="Калининский"), KeyboardButton(text="Первомайский")],
-        [KeyboardButton(text="Пригород и область"), KeyboardButton(text="🔄 В начало")]
+        [KeyboardButton(text="Пригород и область")],
+        [KeyboardButton(text="⬅️ Назад"), KeyboardButton(text="🔄 В начало")]
     ],
     resize_keyboard=True
 )
@@ -98,7 +100,8 @@ brands_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="LG"), KeyboardButton(text="Samsung"), KeyboardButton(text="Bosch")],
         [KeyboardButton(text="Indesit"), KeyboardButton(text="Ariston"), KeyboardButton(text="Candy")],
-        [KeyboardButton(text="✍️ Другая марка"), KeyboardButton(text="🔄 В начало")]
+        [KeyboardButton(text="✍️ Другая марка")],
+        [KeyboardButton(text="⬅️ Назад"), KeyboardButton(text="🔄 В начало")]
     ],
     resize_keyboard=True
 )
@@ -109,7 +112,8 @@ issues_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="🔄 Не крутит барабан / не отжимает")],
         [KeyboardButton(text="⚡️ Не включается / не греет воду")],
         [KeyboardButton(text="🔊 Сильно шумит / стучит / вибрирует")],
-        [KeyboardButton(text="✍️ Своя проблема"), KeyboardButton(text="🔄 В начало")]
+        [KeyboardButton(text="✍️ Своя проблема")],
+        [KeyboardButton(text="⬅️ Назад"), KeyboardButton(text="🔄 В начало")]
     ],
     resize_keyboard=True
 )
@@ -117,7 +121,7 @@ issues_keyboard = ReplyKeyboardMarkup(
 skip_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Пропустить фото")],
-        [KeyboardButton(text="🔄 В начало")]
+        [KeyboardButton(text="⬅️ Назад"), KeyboardButton(text="🔄 В начало")]
     ],
     resize_keyboard=True
 )
@@ -125,7 +129,7 @@ skip_keyboard = ReplyKeyboardMarkup(
 contact_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📱 Поделиться контактом", request_contact=True)],
-        [KeyboardButton(text="🔄 В начало")]
+        [KeyboardButton(text="⬅️ Назад"), KeyboardButton(text="🔄 В начало")]
     ],
     resize_keyboard=True
 )
@@ -362,10 +366,15 @@ async def admin_view_warranty(callback: CallbackQuery):
     await callback.message.answer(warranty_ticket, parse_mode="Markdown")
     await callback.answer()
 
+# --- ПОШАГОВОЕ СОЗДАНИЕ ЗАЯВКИ С КНОПКОЙ «НАЗАД» ---
 @router.message(F.text == "🛠 Оставить заявку")
 async def start_order(message: Message, state: FSMContext):
     await state.set_state(RepairOrder.waiting_for_district)
-    await message.answer("Выберите ваш район города (или область):", reply_markup=districts_keyboard)
+    await message.answer("Шаг 1 из 5: Выберите ваш район города (или область):", reply_markup=districts_keyboard)
+
+@router.message(RepairOrder.waiting_for_district, F.text == "⬅️ Назад")
+async def back_to_start(message: Message, state: FSMContext):
+    await cmd_start(message, state)
 
 @router.message(RepairOrder.waiting_for_district)
 async def process_district(message: Message, state: FSMContext):
@@ -374,7 +383,12 @@ async def process_district(message: Message, state: FSMContext):
         return
     await state.update_data(district=message.text)
     await state.set_state(RepairOrder.waiting_for_brand)
-    await message.answer("Выберите марку вашей стиральной машины из списка или нажмите «✍️ Другая марка»:", reply_markup=brands_keyboard)
+    await message.answer("Шаг 2 из 5: Выберите марку вашей стиральной машины из списка или нажмите «✍️ Другая марка»:", reply_markup=brands_keyboard)
+
+@router.message(RepairOrder.waiting_for_brand, F.text == "⬅️ Назад")
+async def back_to_district(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.waiting_for_district)
+    await message.answer("Шаг 1 из 5: Выберите ваш район города (или область):", reply_markup=districts_keyboard)
 
 @router.message(RepairOrder.waiting_for_brand, F.text == "✍️ Другая марка")
 async def custom_brand_prompt(message: Message, state: FSMContext):
@@ -388,7 +402,12 @@ async def process_brand_choice(message: Message, state: FSMContext):
         return
     await state.update_data(brand=message.text)
     await state.set_state(RepairOrder.waiting_for_issue)
-    await message.answer("Выберите проблему из списка или нажмите «✍️ Своя проблема»:", reply_markup=issues_keyboard)
+    await message.answer("Шаг 3 из 5: Выберите проблему из списка или нажмите «✍️ Своя проблема»:", reply_markup=issues_keyboard)
+
+@router.message(RepairOrder.waiting_for_custom_brand, F.text == "⬅️ Назад")
+async def back_to_brand(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.waiting_for_brand)
+    await message.answer("Шаг 2 из 5: Выберите марку вашей стиральной машины:", reply_markup=brands_keyboard)
 
 @router.message(RepairOrder.waiting_for_custom_brand)
 async def process_custom_brand(message: Message, state: FSMContext):
@@ -397,7 +416,12 @@ async def process_custom_brand(message: Message, state: FSMContext):
         return
     await state.update_data(brand=message.text)
     await state.set_state(RepairOrder.waiting_for_issue)
-    await message.answer("Выберите проблему из списка или нажмите «✍️ Своя проблема»:", reply_markup=issues_keyboard)
+    await message.answer("Шаг 3 из 5: Выберите проблему из списка или нажмите «✍️ Своя проблема»:", reply_markup=issues_keyboard)
+
+@router.message(RepairOrder.waiting_for_issue, F.text == "⬅️ Назад")
+async def back_to_brand_choice(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.waiting_for_brand)
+    await message.answer("Шаг 2 из 5: Выберите марку вашей стиральной машины:", reply_markup=brands_keyboard)
 
 @router.message(RepairOrder.waiting_for_issue, F.text == "✍️ Своя проблема")
 async def custom_issue_prompt(message: Message, state: FSMContext):
@@ -411,7 +435,12 @@ async def process_issue_choice(message: Message, state: FSMContext):
         return
     await state.update_data(issue=message.text)
     await state.set_state(RepairOrder.waiting_for_photo)
-    await message.answer("Если есть возможность, отправьте фото поломки или панели машины (или нажмите «Пропустить фото»):", reply_markup=skip_keyboard)
+    await message.answer("Шаг 4 из 5: Если есть возможность, отправьте фото поломки или панели машины (или нажмите «Пропустить фото»):", reply_markup=skip_keyboard)
+
+@router.message(RepairOrder.waiting_for_custom_issue, F.text == "⬅️ Назад")
+async def back_to_issue_choice(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.waiting_for_issue)
+    await message.answer("Шаг 3 из 5: Выберите проблему из списка:", reply_markup=issues_keyboard)
 
 @router.message(RepairOrder.waiting_for_custom_issue)
 async def process_custom_issue(message: Message, state: FSMContext):
@@ -420,25 +449,36 @@ async def process_custom_issue(message: Message, state: FSMContext):
         return
     await state.update_data(issue=message.text)
     await state.set_state(RepairOrder.waiting_for_photo)
-    await message.answer("Если есть возможность, отправьте фото поломки или панели машины (или нажмите «Пропустить фото»):", reply_markup=skip_keyboard)
+    await message.answer("Шаг 4 из 5: Если есть возможность, отправьте фото поломки или панели машины (или нажмите «Пропустить фото»):", reply_markup=skip_keyboard)
+
+@router.message(RepairOrder.waiting_for_photo, F.text == "⬅️ Назад")
+async def back_to_issue(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.waiting_for_issue)
+    await message.answer("Шаг 3 из 5: Выберите проблему из списка:", reply_markup=issues_keyboard)
 
 @router.message(RepairOrder.waiting_for_photo, F.photo)
 async def process_photo(message: Message, state: FSMContext):
     photo_id = message.photo[-1].file_id
     await state.update_data(photo=photo_id)
     await state.set_state(RepairOrder.waiting_for_contact)
-    await message.answer("Пожалуйста, поделитесь контактом в один клик или введите номер телефона вручную:", reply_markup=contact_keyboard)
+    await message.answer("Шаг 5 из 5: Пожалуйста, поделитесь контактом в один клик или введите номер телефона вручную:", reply_markup=contact_keyboard)
 
 @router.message(RepairOrder.waiting_for_photo, F.text == "Пропустить фото")
 async def skip_photo(message: Message, state: FSMContext):
     await state.update_data(photo=None)
     await state.set_state(RepairOrder.waiting_for_contact)
-    await message.answer("Пожалуйста, поделитесь контактом в один клик или введите номер телефона вручную:", reply_markup=contact_keyboard)
+    await message.answer("Шаг 5 из 5: Пожалуйста, поделитесь контактом в один клик или введите номер телефона вручную:", reply_markup=contact_keyboard)
+
+@router.message(RepairOrder.waiting_for_contact, F.text == "⬅️ Назад")
+async def back_to_photo(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.waiting_for_photo)
+    await message.answer("Шаг 4 из 5: Отправьте фото или нажмите «Пропустить фото»:", reply_markup=skip_keyboard)
 
 @router.message(RepairOrder.waiting_for_contact, F.contact)
 async def process_contact_button(message: Message, state: FSMContext):
     contact = message.contact.phone_number
-    await finalize_order(message, state, contact)
+    await state.update_data(contact=contact)
+    await show_preview(message, state)
 
 @router.message(RepairOrder.waiting_for_contact)
 async def process_contact_text(message: Message, state: FSMContext):
@@ -446,14 +486,48 @@ async def process_contact_text(message: Message, state: FSMContext):
         await cmd_start(message, state)
         return
     contact = message.text
-    await finalize_order(message, state, contact)
+    await state.update_data(contact=contact)
+    await show_preview(message, state)
 
-async def finalize_order(message: Message, state: FSMContext, contact: str):
+# --- ПРЕДПРОСМОТР ЗАЯВКИ ПЕРЕД ОТПРАВКОЙ ---
+async def show_preview(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.preview_order)
+    data = await state.get_data()
+    
+    preview_text = (
+        f"📋 **Проверьте вашу заявку:**\n\n"
+        f"📍 Район: {data.get('district')}\n"
+        f"🏷 Марка: {data.get('brand')}\n"
+        f"⚠️ Проблема: {data.get('issue')}\n"
+        f"📞 Телефон: {data.get('contact')}\n"
+        f"📷 Фото: {'Прикреплено' if data.get('photo') else 'Не прикреплено'}\n\n"
+        f"Всё верно?"
+    )
+    
+    markup = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✅ Все верно / Отправить"), KeyboardButton(text="❌ Изменить данные")]
+        ],
+        resize_keyboard=True
+    )
+    
+    if data.get("photo"):
+        await message.answer_photo(photo=data.get("photo"), caption=preview_text, reply_markup=markup, parse_mode="Markdown")
+    else:
+        await message.answer(text=preview_text, reply_markup=markup, parse_mode="Markdown")
+
+@router.message(RepairOrder.preview_order, F.text == "❌ Изменить данные")
+async def restart_order_from_preview(message: Message, state: FSMContext):
+    await start_order(message, state)
+
+@router.message(RepairOrder.preview_order, F.text == "✅ Все верно / Отправить")
+async def confirm_and_send_order(message: Message, state: FSMContext):
     data = await state.get_data()
     district = data.get("district")
     brand = data.get("brand")
     issue = data.get("issue")
     photo = data.get("photo")
+    contact = data.get("contact")
     
     user = message.from_user
     username = f"@{user.username}" if user.username else "нет username"
@@ -482,7 +556,7 @@ async def finalize_order(message: Message, state: FSMContext, contact: str):
 
     kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
     await message.answer(
-        "Спасибо! Ваша заявка принята. Мастер свяжется с вами в ближайшее время, если этого не произошло позвоните по телефону +7 953 804 3048",
+        "Спасибо! Ваша заявка успешно отправлена мастеру. Он свяжется с вами в ближайшее время!",
         reply_markup=kb
     )
     await state.clear()
