@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
-TOKEN = "9255461947:AAH3i9H9oZqD_7K5O9O_JYvd5Gi47aCq2M8" # Твой токен
+TOKEN = "9255429964:AAGPJ8k9el502n_D8QX0SmpmJYvD5G-Pqmw" # Твой токен
 ADMIN_ID = 6684594078 # Твой ID
 
 bot = Bot(token=TOKEN)
