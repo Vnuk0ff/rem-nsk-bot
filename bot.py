@@ -218,7 +218,6 @@ def get_admin_order_markup(order_id, status=""):
             InlineKeyboardButton(text="📋 Выписать гарантию / счет", callback_data=f"fill_warranty_{order_id}")
         ]
     ]
-    # Если заказ готов или оплачен, добавляем кнопку посмотреть гарантию для админа
     if status in ["Готов", "Оплачено / Выполнено"]:
         buttons.append([InlineKeyboardButton(text="📜 Посмотреть гарантию", callback_data=f"admin_view_warranty_{order_id}")])
         
@@ -334,7 +333,6 @@ async def admin_show_status_list(callback: CallbackQuery):
         await callback.message.answer(text, reply_markup=markup, parse_mode="Markdown")
     await callback.answer()
 
-# Кнопка для админа посмотреть гарантию прямо из списка
 @router.callback_query(F.data.startswith("admin_view_warranty_"))
 async def admin_view_warranty(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -346,11 +344,12 @@ async def admin_view_warranty(callback: CallbackQuery):
     period = order[10] if order[10] else "1 год"
     rem_days, total_days = calculate_warranty_days(completed_date, period)
 
+    client_str = str(order[2]) + " (" + str(order[7]) + ")"
     warranty_ticket = (
-        f"📜 **ГАРАНТИЙНЫЙ ТАЛОН (Копия для мастера)**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        "📜 **ГАРАНТИЙНЫЙ ТАЛОН (Копия для мастера)**\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
         f"Заказ №: {order_id}\n"
-        f"Клиент: {order[2]} ({order[7])\n"
+        f"Клиент: {client_str}\n"
         f"Марка: {order[4]}\n"
         f"Работы: {order[11]}\n"
         f"Сумма: {order[9]} руб.\n"
@@ -358,7 +357,7 @@ async def admin_view_warranty(callback: CallbackQuery):
         f"🛡 Срок гарантии: {period}\n"
         f"⏳ **Осталось дней: {rem_days} из {total_days} дн.**\n"
         f"Статус: {order[8]}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━"
+        "━━━━━━━━━━━━━━━━━━━━━"
     )
     await callback.message.answer(warranty_ticket, parse_mode="Markdown")
     await callback.answer()
@@ -548,7 +547,6 @@ async def process_warranty_details(message: Message, state: FSMContext):
     order = get_order_by_id(order_id)
     user_id = order[1]
 
-    # Элегантный блок для оплаты с цитированием номера для быстрого копирования в 1 клик
     client_payment_markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💵 Наличными / Переводом на месте", callback_data=f"pay_cash_{order_id}")],
         [InlineKeyboardButton(text="📤 Я оплатил (сообщить мастеру)", callback_data=f"notify_master_{order_id}")]
