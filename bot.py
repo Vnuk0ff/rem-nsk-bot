@@ -20,7 +20,6 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
 
-# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -46,7 +45,6 @@ def init_db():
 
 init_db()
 
-# --- СОСТОЯНИЯ FSM ---
 class RepairOrder(StatesGroup):
     waiting_for_district = State()
     waiting_for_brand = State()
@@ -62,7 +60,6 @@ class AdminWarrantyFill(StatesGroup):
     waiting_for_period = State()
     waiting_for_details = State()
 
-# --- КЛАВИАТУРЫ ---
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🛠 Оставить заявку"), KeyboardButton(text="📜 Мои заказы")],
@@ -120,7 +117,6 @@ contact_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# --- ВПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БД ---
 def save_order(user_id, user_name, district, brand, issue, photo, contact):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -167,7 +163,22 @@ def update_order_warranty(order_id, price, period, details):
     conn.commit()
     conn.close()
 
-# --- ОБРАБОТЧИКИ КОМАНД И МЕНЮ ---
+# Генерация постоянной клавиатуры управления для админа
+def get_admin_order_markup(order_id):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📞 Созвон", callback_data=f"status_{order_id}_Созвон"),
+            InlineKeyboardButton(text="🛠 В работе", callback_data=f"status_{order_id}_В работе")
+        ],
+        [
+            InlineKeyboardButton(text="⚠️ Не ответ", callback_data=f"status_{order_id}_Не ответ"),
+            InlineKeyboardButton(text="🟢 Готов", callback_data=f"status_{order_id}_Готов")
+        ],
+        [
+            InlineKeyboardButton(text="📋 Выписать гарантию / счет", callback_data=f"fill_warranty_{order_id}")
+        ]
+    ])
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
@@ -203,7 +214,6 @@ async def show_price(message: Message):
         reply_markup=main_keyboard
     )
 
-# --- ИСТОРИЯ ЗАКАЗОВ ДЛЯ КЛИЕНТА ---
 @router.message(F.text == "📜 Мои заказы")
 async def show_user_orders(message: Message):
     orders = get_user_orders(message.from_user.id)
@@ -225,7 +235,6 @@ async def show_user_orders(message: Message):
     
     await message.answer(text, reply_markup=main_keyboard)
 
-# --- ЛОГИКА СОЗДАНИЯ ЗАЯВКИ ---
 @router.message(F.text == "🛠 Оставить заявку")
 async def start_order(message: Message, state: FSMContext):
     await state.set_state(RepairOrder.waiting_for_district)
@@ -330,14 +339,11 @@ async def finalize_order(message: Message, state: FSMContext, contact: str):
         f"🏷 Марка: {brand}\n"
         f"⚠️ Проблема: {issue}\n"
         f"📞 Контакт: {contact}\n"
-        f"👤 Клиент: {user.first_name} ({username})"
+        f"👤 Клиент: {user.first_name} ({username})\n\n"
+        f"📌 Статус: Новая"
     )
 
-    admin_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📞 Созвон", callback_data=f"status_{order_id}_Созвон"),
-         InlineKeyboardButton(text="🛠 В работе", callback_data=f"status_{order_id}_В работе")],
-        [InlineKeyboardButton(text="📋 Выписать гарантию / счет", callback_data=f"fill_warranty_{order_id}")]
-    ])
+    admin_markup = get_admin_order_markup(order_id)
 
     try:
         if photo:
@@ -353,16 +359,33 @@ async def finalize_order(message: Message, state: FSMContext, contact: str):
     )
     await state.clear()
 
-# --- ОБРАБОТЧИКИ АДМИН-ДЕЙСТВИЙ И ГАРАНТИИ ---
+# --- УПРАВЛЕНИЕ СТАТУСАМИ ДЛЯ МАСТЕРА ---
 @router.callback_query(F.data.startswith("status_"))
 async def change_status_callback(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
     _, order_id, new_status = callback.data.split("_")
     update_order_status(order_id, new_status)
-    await callback.answer(f"Статус заказа №{order_id} изменен на: {new_status}")
-    await callback.message.edit_caption(caption=callback.message.caption + f"\n\n📌 Статус: {new_status}") if callback.message.photo else await callback.message.edit_text(text=callback.message.text + f"\n\n📌 Статус: {new_status}")
+    
+    # Обновляем текст сообщения у админа, сохраняя актуальный статус и кнопки
+    old_text = callback.message.caption if callback.message.photo else callback.message.text
+    # Заменяем старый статус на новый в тексте
+    if "📌 Статус:" in old_text:
+        base_text = old_text.split("📌 Статус:")[0].strip()
+    else:
+        base_text = old_text.strip()
+    
+    new_admin_text = f"{base_text}\n\n📌 Статус: {new_status}"
+    admin_markup = get_admin_order_markup(order_id)
 
+    if callback.message.photo:
+        await callback.message.edit_caption(caption=new_admin_text, reply_markup=admin_markup)
+    else:
+        await callback.message.edit_text(text=new_admin_text, reply_markup=admin_markup)
+        
+    await callback.answer(f"Статус изменен на: {new_status}")
+
+# --- ЗАПОЛНЕНИЕ ГАРАНТИИ И СЧЕТА ---
 @router.callback_query(F.data.startswith("fill_warranty_"))
 async def start_fill_warranty(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
@@ -403,10 +426,10 @@ async def process_warranty_details(message: Message, state: FSMContext):
     order = get_order_by_id(order_id)
     user_id = order[1]
 
-    # Кнопки оплаты для клиента
-    payment_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить по СБП", url=f"https://qr.nspk.ru/")], # Ссылка или перевод
-        [InlineKeyboardButton(text="✅ Подтвердить оплату мастеру", callback_data=f"confirm_pay_{order_id}")]
+    # Клиенту приходят 2 кнопки выбора способа оплаты
+    client_payment_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Оплатить по СБП", callback_data=f"pay_sbp_{order_id}")],
+        [InlineKeyboardButton(text="💵 Наличными / Переводом мастеру", callback_data=f"pay_cash_{order_id}")]
     ])
 
     bill_text = (
@@ -414,21 +437,83 @@ async def process_warranty_details(message: Message, state: FSMContext):
         f"🔧 Выполненные работы: {details}\n"
         f"🛡 Срок гарантии: {period}\n"
         f"💰 К оплате: {price} руб.\n\n"
-        f"Вы можете перевести сумму мастеру по СБП (на номер +79538043048) или оплатить наличными/переводом на месте."
+        f"Выберите удобный способ оплаты:"
     )
 
     try:
-        await bot.send_message(chat_id=user_id, text=bill_text, reply_markup=payment_markup)
+        await bot.send_message(chat_id=user_id, text=bill_text, reply_markup=client_payment_markup, parse_mode="Markdown")
         await message.answer(f"✅ Счет и гарантия успешно отправлены клиенту по заказу №{order_id}!")
     except Exception as e:
         await message.answer(f"Ошибка при отправке клиенту: {e}")
 
     await state.clear()
 
-@router.callback_query(F.data.startswith("confirm_pay_"))
-async def user_confirm_pay(callback: CallbackQuery):
+# --- КЛИЕНТ ВЫБИРАЕТ СПОСОБ ОПЛАТЫ ---
+@router.callback_query(F.data.startswith("pay_sbp_"))
+async def client_chose_sbp(callback: CallbackQuery):
     order_id = callback.data.split("_")[2]
     order = get_order_by_id(order_id)
+    price = order[9]
+
+    sbp_text = (
+        f"💳 **Оплата по СБП (Система быстрых платежей)**\n\n"
+        f"1. Откройте приложение вашего банка (Сбер, Альфа, Т-Банк и др.).\n"
+        f"2. Переведите сумму **{price} руб.** по номеру: `+79538043048` (Николай К.)\n\n"
+        f"После совершения перевода нажмите кнопку ниже, чтобы уведомить мастера:"
+    )
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Я перевел деньги (сообщить мастеру)", callback_data=f"notify_master_{order_id}")]
+    ])
+    await callback.message.edit_text(text=sbp_text, reply_markup=markup, parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("pay_cash_"))
+async def client_chose_cash(callback: CallbackQuery):
+    order_id = callback.data.split("_")[2]
+    order = get_order_by_id(order_id)
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Сообщить мастеру об оплате наличными", callback_data=f"notify_master_{order_id}")]
+    ])
+    await callback.message.edit_text(
+        text=f"💵 Вы выбрали оплату наличными или переводом на месте.\n\nПосле расчета с мастером нажмите кнопку ниже, чтобы подтвердить оплату и получить гарантийный талон:",
+        reply_markup=markup
+    )
+    await callback.answer()
+
+# --- УВЕДОМЛЕНИЕ МАСТЕРА ОБ ОПЛАТЕ ОТ КЛИЕНТА ---
+@router.callback_query(F.data.startswith("notify_master_"))
+async def notify_master(callback: CallbackQuery):
+    order_id = callback.data.split("_")[2]
+    order = get_order_by_id(order_id)
+    
+    await callback.message.edit_text(text="⏳ Ожидайте подтверждения оплаты мастером. Как только мастер проверит поступление, вам придет официальный гарантийный талон.")
+    
+    # Кнопка для мастера подтвердить оплату
+    admin_confirm_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Подтвердить получение денег", callback_data=f"admin_confirm_pay_{order_id}")]
+    ])
+    
+    await bot.send_message(
+        chat_id=ADMIN_ID,
+        text=f"🔔 **Клиент сообщил об оплате по заказу №{order_id}!**\nСумма: {price_format(order[9])} руб.\nПроверьте поступление и подтвердите оплату:",
+        reply_markup=admin_confirm_markup,
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+def price_format(val):
+    return val if val else "0"
+
+# --- ПОДТВЕРЖДЕНИЕ ОПЛАТЫ МАСТЕРОМ И ВЫДАЧА ТАЛОНА ---
+@router.callback_query(F.data.startswith("admin_confirm_pay_"))
+async def admin_confirm_payment(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    order_id = callback.data.split("_")[3]
+    order = get_order_by_id(order_id)
+    user_id = order[1]
     
     update_order_status(order_id, "Оплачено / Выполнено")
 
@@ -446,13 +531,16 @@ async def user_confirm_pay(callback: CallbackQuery):
         f"Сохраните этот чек. По вопросам гарантии обращайтесь в бот или по телефону."
     )
 
-    await callback.message.answer(warranty_ticket)
-    await bot.send_message(chat_id=ADMIN_ID, text=f"🎉 Клиент подтвердил оплату по заказу №{order_id} ({order[9]} руб.)!")
-    await callback.answer()
+    try:
+        await bot.send_message(chat_id=user_id, text=warranty_ticket, parse_mode="Markdown")
+        await callback.message.edit_text(text=callback.message.text + "\n\n✅ Оплата подтверждена, гарантийный талон выслан клиенту!")
+    except Exception as e:
+        await callback.message.answer(f"Ошибка отправки талона клиенту: {e}")
+        
+    await callback.answer("Оплата подтверждена!")
 
 dp.include_router(router)
 
-# --- ВЕБ-СЕРВЕР РЕНДЕР ---
 async def handle(request):
     return web.Response(text="Bot is running!")
 
@@ -473,3 +561,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
