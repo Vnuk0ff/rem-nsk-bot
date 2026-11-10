@@ -4,9 +4,7 @@ import os
 from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import CommandStart
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.context import FSMContext
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, KeyboardButtonRequestUsers
 
 TOKEN = "9255429964:AAGPJ8k9el502n_D8QX0SmpmJYvD5G-Pqmw"
 ADMIN_ID = 6684594078
@@ -16,6 +14,7 @@ dp = Dispatcher()
 router = Router()
 
 class RepairOrder(StatesGroup):
+    waiting_for_district = State()
     waiting_for_brand = State()
     waiting_for_custom_brand = State()
     waiting_for_issue = State()
@@ -23,10 +22,24 @@ class RepairOrder(StatesGroup):
     waiting_for_photo = State()
     waiting_for_contact = State()
 
+# Главное меню с кнопкой «Прайс»
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🛠 Оставить заявку"), KeyboardButton(text="ℹ️ О нас")],
-        [KeyboardButton(text="🔄 В начало")]
+        [KeyboardButton(text="🛠 Оставить заявку"), KeyboardButton(text="💰 Прайс")],
+        [KeyboardButton(text="ℹ️ О нас"), KeyboardButton(text="🔄 В начало")]
+    ],
+    resize_keyboard=True
+)
+
+# Клавиатура районов Новосибирска
+districts_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Центральный"), KeyboardButton(text="Железнодорожный")],
+        [KeyboardButton(text="Заельцовский"), KeyboardButton(text="Октябрьский")],
+        [KeyboardButton(text="Советский"), KeyboardButton(text="Ленинский")],
+        [KeyboardButton(text="Кировский"), KeyboardButton(text="Дзержинский")],
+        [KeyboardButton(text="Калининский"), KeyboardButton(text="Первомайский")],
+        [KeyboardButton(text="Пригород и область"), KeyboardButton(text="🔄 В начало")]
     ],
     resize_keyboard=True
 )
@@ -40,7 +53,6 @@ brands_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура с частыми проблемами
 issues_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🚰 Не сливает / не набирает воду")],
@@ -55,6 +67,15 @@ issues_keyboard = ReplyKeyboardMarkup(
 skip_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Пропустить фото")],
+        [KeyboardButton(text="🔄 В начало")]
+    ],
+    resize_keyboard=True
+)
+
+# Клавиатура для отправки телефона в 1 клик
+contact_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📱 Поделиться контактом", request_contact=True)],
         [KeyboardButton(text="🔄 В начало")]
     ],
     resize_keyboard=True
@@ -77,15 +98,40 @@ async def go_start(message: Message, state: FSMContext):
 async def about_us(message: Message):
     await message.answer(
         "🛠 Частный мастер по ремонту стиральных машин\n\n"
-        "• Работаем по всему Новосибирску\n"
+        "• Работаем по всему Новосибирску и области\n"
         "• Быстрый выезд и диагностика\n"
         "• Гарантия на все виды работ\n\n"
+        "📞 Телефон для связи: +7 953 804 3048\n"
+        "💬 Написать мастеру лично: @za_russia_ru\n\n"
         "Нажмите «🛠 Оставить заявку», чтобы вызвать мастера.",
         reply_markup=main_keyboard
     )
 
+@router.message(F.text == "💰 Прайс")
+async def show_price(message: Message):
+    await message.answer(
+        "💰 **Прайс-лист на ремонт стиральных машин**\n\n"
+        "Здесь скоро появится актуальный прайс на услуги.\n"
+        "По вопросам стоимости вы всегда можете проконсультироваться у мастера: @za_russia_ru",
+        reply_markup=main_keyboard
+    )
+
+# --- Логика создания заявки ---
 @router.message(F.text == "🛠 Оставить заявку")
 async def start_order(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.waiting_for_district)
+    await message.answer(
+        "Выберите ваш район города (или область):",
+        reply_markup=districts_keyboard
+    )
+
+@router.message(RepairOrder.waiting_for_district)
+async def process_district(message: Message, state: FSMContext):
+    if message.text == "🔄 В начало":
+        await cmd_start(message, state)
+        return
+    
+    await state.update_data(district=message.text)
     await state.set_state(RepairOrder.waiting_for_brand)
     await message.answer(
         "Выберите марку вашей стиральной машины из списка или нажмите «✍️ Другая марка»:",
@@ -153,13 +199,19 @@ async def process_photo(message: Message, state: FSMContext):
     photo_id = message.photo[-1].file_id
     await state.update_data(photo=photo_id)
     await state.set_state(RepairOrder.waiting_for_contact)
-    await message.answer("Пожалуйста, укажите ваш номер телефона или контакт для связи:", reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        "Пожалуйста, поделитесь контактом в один клик или введите номер телефона вручную:",
+        reply_markup=contact_keyboard
+    )
 
 @router.message(RepairOrder.waiting_for_photo, F.text == "Пропустить фото")
 async def skip_photo(message: Message, state: FSMContext):
     await state.update_data(photo=None)
     await state.set_state(RepairOrder.waiting_for_contact)
-    await message.answer("Пожалуйста, укажите ваш номер телефона или контакт для связи:", reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        "Пожалуйста, поделитесь контактом в один клик или введите номер телефона вручную:",
+        reply_markup=contact_keyboard
+    )
 
 @router.message(RepairOrder.waiting_for_photo)
 async def wrong_photo_format(message: Message, state: FSMContext):
@@ -168,23 +220,32 @@ async def wrong_photo_format(message: Message, state: FSMContext):
         return
     await message.answer("Пожалуйста, отправьте фотографию или нажмите «Пропустить фото».")
 
+@router.message(RepairOrder.waiting_for_contact, F.contact)
+async def process_contact_button(message: Message, state: FSMContext):
+    contact = message.contact.phone_number
+    await finalize_order(message, state, contact)
+
 @router.message(RepairOrder.waiting_for_contact)
-async def process_contact(message: Message, state: FSMContext):
+async def process_contact_text(message: Message, state: FSMContext):
     if message.text == "🔄 В начало":
         await cmd_start(message, state)
         return
-    
+    contact = message.text
+    await finalize_order(message, state, contact)
+
+async def finalize_order(message: Message, state: FSMContext, contact: str):
     data = await state.get_data()
+    district = data.get("district")
     brand = data.get("brand")
     issue = data.get("issue")
     photo = data.get("photo")
-    contact = message.text
     
     user = message.from_user
     username = f"@{user.username}" if user.username else "нет username"
 
     admin_text = (
         f"🚨 Новая заявка на ремонт!\n\n"
+        f"📍 Район: {district}\n"
         f"🏷 Марка: {brand}\n"
         f"⚠️ Проблема: {issue}\n"
         f"📞 Контакт: {contact}\n"
