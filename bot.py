@@ -19,10 +19,8 @@ logging.basicConfig(level=logging.INFO)
 TOKEN = "9255429964:AAGPJ8k9el502n_D8QX0SmpmJYvD5G-Pqmw"
 ADMIN_ID = 6684594078
 
-# Подключаем прокси PythonAnywhere
-session = AiohttpSession(proxy="http://proxy.server:3128")
-bot = Bot(token=TOKEN, session=session)
-router = Router()
+bot = Bot(token=TOKEN)
+
 
 
 class RepairOrder(StatesGroup):
