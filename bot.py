@@ -19,6 +19,7 @@ class RepairOrder(StatesGroup):
     waiting_for_brand = State()
     waiting_for_custom_brand = State()
     waiting_for_issue = State()
+    waiting_for_custom_issue = State()
     waiting_for_photo = State()
     waiting_for_contact = State()
 
@@ -30,12 +31,23 @@ main_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура с популярными брендами
 brands_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="LG"), KeyboardButton(text="Samsung"), KeyboardButton(text="Bosch")],
         [KeyboardButton(text="Indesit"), KeyboardButton(text="Ariston"), KeyboardButton(text="Candy")],
         [KeyboardButton(text="✍️ Другая марка"), KeyboardButton(text="🔄 В начало")]
+    ],
+    resize_keyboard=True
+)
+
+# Клавиатура с частыми проблемами
+issues_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🚰 Не сливает / не набирает воду")],
+        [KeyboardButton(text="🔄 Не крутит барабан / не отжимает")],
+        [KeyboardButton(text="⚡️ Не включается / не греет воду")],
+        [KeyboardButton(text="🔊 Сильно шумит / стучит / вибрирует")],
+        [KeyboardButton(text="✍️ Своя проблема"), KeyboardButton(text="🔄 В начало")]
     ],
     resize_keyboard=True
 )
@@ -93,7 +105,7 @@ async def process_brand_choice(message: Message, state: FSMContext):
     
     await state.update_data(brand=message.text)
     await state.set_state(RepairOrder.waiting_for_issue)
-    await message.answer("Опишите коротко проблему (например: не отжимает, не греет воду, шумит при стирке):", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Выберите проблему из списка или нажмите «✍️ Своя проблема»:", reply_markup=issues_keyboard)
 
 @router.message(RepairOrder.waiting_for_custom_brand)
 async def process_custom_brand(message: Message, state: FSMContext):
@@ -103,13 +115,32 @@ async def process_custom_brand(message: Message, state: FSMContext):
     
     await state.update_data(brand=message.text)
     await state.set_state(RepairOrder.waiting_for_issue)
-    await message.answer("Опишите коротко проблему (например: не отжимает, не греет воду, шумит при стирке):", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Выберите проблему из списка или нажмите «✍️ Своя проблема»:", reply_markup=issues_keyboard)
+
+@router.message(RepairOrder.waiting_for_issue, F.text == "✍️ Своя проблема")
+async def custom_issue_prompt(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.waiting_for_custom_issue)
+    await message.answer("Опишите проблему своими словами:", reply_markup=ReplyKeyboardRemove())
 
 @router.message(RepairOrder.waiting_for_issue)
-async def process_issue(message: Message, state: FSMContext):
+async def process_issue_choice(message: Message, state: FSMContext):
     if message.text == "🔄 В начало":
         await cmd_start(message, state)
         return
+    
+    await state.update_data(issue=message.text)
+    await state.set_state(RepairOrder.waiting_for_photo)
+    await message.answer(
+        "Если есть возможность, отправьте фото поломки или панели машины (или нажмите «Пропустить фото»):",
+        reply_markup=skip_keyboard
+    )
+
+@router.message(RepairOrder.waiting_for_custom_issue)
+async def process_custom_issue(message: Message, state: FSMContext):
+    if message.text == "🔄 В начало":
+        await cmd_start(message, state)
+        return
+    
     await state.update_data(issue=message.text)
     await state.set_state(RepairOrder.waiting_for_photo)
     await message.answer(
