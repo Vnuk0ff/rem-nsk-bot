@@ -62,7 +62,6 @@ class AdminWarrantyFill(StatesGroup):
     waiting_for_period = State()
     waiting_for_details = State()
 
-# Главное меню клиента
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🛠 Оставить заявку"), KeyboardButton(text="📜 Мои заказы")],
@@ -72,7 +71,6 @@ main_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Админское меню (показывается только тебе в /start)
 def get_admin_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -188,10 +186,8 @@ def update_order_warranty(order_id, price, period, details):
     conn.close()
 
 def calculate_warranty_days(completed_at_str, period_str):
-    """Считает сколько дней осталось до конца гарантии"""
     try:
         completed_date = datetime.strptime(completed_at_str, "%Y-%m-%d")
-        # Парсим срок (поддерживаем «X месяцев» или «X год» или просто «365 дней»)
         days_total = 365
         if "месяц" in period_str:
             months = int(''.join(filter(str.isdigit, period_str)) or 1)
@@ -261,7 +257,6 @@ async def show_price(message: Message):
         reply_markup=kb
     )
 
-# --- ИСТОРИЯ ЗАКАЗОВ КЛИЕНТА (С ДИНАМИЧЕСКИМ ТАЛОНОМ) ---
 @router.message(F.text == "📜 Мои заказы")
 async def show_user_orders(message: Message):
     orders = get_user_orders(message.from_user.id)
@@ -283,7 +278,6 @@ async def show_user_orders(message: Message):
             text += f"💰 Сумма: {price} руб.\n"
             text += f"🔧 Работы: {details}\n"
         
-        # Если заказ выполнен и есть гарантия — рисуем интерактивный тапон с днями
         if status == "Оплачено / Выполнено" and completed_at:
             rem_days, total_days = calculate_warranty_days(completed_at, period)
             text += (
@@ -296,7 +290,6 @@ async def show_user_orders(message: Message):
         text += "-------------------------\n"
         await message.answer(text, parse_mode="Markdown")
 
-# --- АДМИН-ПАНЕЛЬ: ФИЛЬТРАЦИЯ ЗАКАЗОВ ПО СТАТУСАМ ---
 @router.message(F.text == "📊 Управление заказами (Админ)")
 async def admin_orders_menu(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -336,7 +329,6 @@ async def admin_show_status_list(callback: CallbackQuery):
         await callback.message.answer(text, reply_markup=markup, parse_mode="Markdown")
     await callback.answer()
 
-# --- ЛОГИКА СОЗДАНИЯ ЗАЯВКИ ---
 @router.message(F.text == "🛠 Оставить заявку")
 async def start_order(message: Message, state: FSMContext):
     await state.set_state(RepairOrder.waiting_for_district)
@@ -463,4 +455,175 @@ async def finalize_order(message: Message, state: FSMContext, contact: str):
     await state.clear()
 
 @router.callback_query(F.data.startswith("status_"))
-async def
+async def change_status_callback(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    _, order_id, new_status = callback.data.split("_")
+    update_order_status(order_id, new_status)
+    
+    old_text = callback.message.caption if callback.message.photo else callback.message.text
+    base_text = old_text.split("📌 Статус:")[0].strip() if "📌 Статус:" in old_text else old_text.strip()
+    
+    new_admin_text = f"{base_text}\n\n📌 Статус: {new_status}"
+    admin_markup = get_admin_order_markup(order_id)
+
+    if callback.message.photo:
+        await callback.message.edit_caption(caption=new_admin_text, reply_markup=admin_markup)
+    else:
+        await callback.message.edit_text(text=new_admin_text, reply_markup=admin_markup)
+        
+    await callback.answer(f"Статус изменен на: {new_status}")
+
+@router.callback_query(F.data.startswith("fill_warranty_"))
+async def start_fill_warranty(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    order_id = callback.data.split("_")[2]
+    await state.update_data(warranty_order_id=order_id)
+    await state.set_state(AdminWarrantyFill.waiting_for_price)
+    await callback.message.answer(f"Заполнение гарантии для заказа №{order_id}.\nВведите итоговую стоимость ремонта (руб):")
+    await callback.answer()
+
+@router.message(AdminWarrantyFill.waiting_for_price)
+async def process_warranty_price(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.update_data(price=message.text)
+    await state.set_state(AdminWarrantyFill.waiting_for_period)
+    await message.answer("Укажите срок гарантии (например: 6 месяцев, 1 год, 365 дней):")
+
+@router.message(AdminWarrantyFill.waiting_for_period)
+async def process_warranty_period(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.update_data(period=message.text)
+    await state.set_state(AdminWarrantyFill.waiting_for_details)
+    await message.answer("Опишите выполненные работы (например: Замена сливного насоса):")
+
+@router.message(AdminWarrantyFill.waiting_for_details)
+async def process_warranty_details(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    order_id = data.get("warranty_order_id")
+    price = data.get("price")
+    period = data.get("period")
+    details = message.text
+
+    update_order_warranty(order_id, price, period, details)
+    order = get_order_by_id(order_id)
+    user_id = order[1]
+
+    client_payment_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Оплатить по СБП", url=f"https://qr.nspk.ru/AD1A002JQ9L3T95J2K83G13V06S6I425?type=02&sum={price}&cur=RUB&crc=0000")],
+        [InlineKeyboardButton(text="💵 Наличными / Переводом мастеру", callback_data=f"pay_cash_{order_id}")],
+        [InlineKeyboardButton(text="📤 Я оплатил (сообщить)", callback_data=f"notify_master_{order_id}")]
+    ])
+
+    bill_text = (
+        f"🧾 **Счет и гарантия по заказу №{order_id}**\n\n"
+        f"🔧 Выполненные работы: {details}\n"
+        f"🛡 Срок гарантии: {period}\n"
+        f"💰 К оплате: **{price} руб.**\n\n"
+        f"Нажмите кнопку «💳 Оплатить по СБП» для быстрого перехода в ваш банк или выберите оплату на месте."
+    )
+
+    try:
+        await bot.send_message(chat_id=user_id, text=bill_text, reply_markup=client_payment_markup, parse_mode="Markdown")
+        await message.answer(f"✅ Счет и гарантия успешно отправлены клиенту по заказу №{order_id}!")
+    except Exception as e:
+        await message.answer(f"Ошибка при отправке клиенту: {e}")
+
+    await state.clear()
+
+@router.callback_query(F.data.startswith("pay_cash_"))
+async def client_chose_cash(callback: CallbackQuery):
+    order_id = callback.data.split("_")[2]
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Сообщить мастеру об оплате", callback_data=f"notify_master_{order_id}")]
+    ])
+    await callback.message.edit_text(
+        text=f"💵 Вы выбрали оплату наличными или переводом мастеру на месте.\n\nПосле расчета нажмите кнопку ниже:",
+        reply_markup=markup
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("notify_master_"))
+async def notify_master(callback: CallbackQuery):
+    order_id = callback.data.split("_")[2]
+    order = get_order_by_id(order_id)
+    
+    await callback.message.edit_text(text="⏳ Ожидайте подтверждения оплаты мастером. После проверки вам придет официальный гарантийный талон.")
+    
+    admin_confirm_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Подтвердить получение денег", callback_data=f"admin_confirm_pay_{order_id}")]
+    ])
+    
+    await bot.send_message(
+        chat_id=ADMIN_ID,
+        text=f"🔔 **Клиент сообщил об оплате по заказу №{order_id}!**\nСумма: {order[9]} руб.\nПроверьте поступление и подтвердите оплату:",
+        reply_markup=admin_confirm_markup,
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("admin_confirm_pay_"))
+async def admin_confirm_payment(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    order_id = callback.data.split("_")[3]
+    order = get_order_by_id(order_id)
+    user_id = order[1]
+    
+    update_order_status(order_id, "Оплачено / Выполнено")
+    completed_date = order[12]
+    period = order[10]
+    rem_days, total_days = calculate_warranty_days(completed_date, period)
+
+    warranty_ticket = (
+        f"📜 **ОФИЦИАЛЬНЫЙ ЭЛЕКТРОННЫЙ ГАРАНТИЙНЫЙ ТАЛОН**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Заказ №: {order_id}\n"
+        f"Марка: {order[4]}\n"
+        f"Работы: {order[11]}\n"
+        f"Сумма: {order[9]} руб.\n"
+        f"📅 Дата выдачи: {completed_date}\n"
+        f"🛡 Срок гарантии: {period}\n"
+        f"⏳ **Осталось дней гарантии: {rem_days} из {total_days} дн.**\n"
+        f"Статус: 🟢 ОПЛАЧЕНО И ПОДТВЕРЖДЕНО\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Мастер: Николай (+7 953 804 3048)\n"
+        f"Сохраните этот талон. По вопросам гарантии обращайтесь в бот."
+    )
+
+    try:
+        await bot.send_message(chat_id=user_id, text=warranty_ticket, parse_mode="Markdown")
+        await callback.message.edit_text(text=callback.message.text + "\n\n✅ Оплата подтверждена, гарантийный талон выслан клиенту!")
+    except Exception as e:
+        await callback.message.answer(f"Ошибка отправки талона клиенту: {e}")
+        
+    await callback.answer("Оплата подтверждена!")
+
+dp.include_router(router)
+
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"Web server started on port {port}")
+
+async def main():
+    logging.basicConfig(level=logging.INFO)
+    await start_web_server()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
