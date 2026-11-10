@@ -4,7 +4,9 @@ import os
 from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import CommandStart
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, KeyboardButtonRequestUsers
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 
 TOKEN = "9255429964:AAGPJ8k9el502n_D8QX0SmpmJYvD5G-Pqmw"
 ADMIN_ID = 6684594078
@@ -22,7 +24,6 @@ class RepairOrder(StatesGroup):
     waiting_for_photo = State()
     waiting_for_contact = State()
 
-# Главное меню с кнопкой «Прайс»
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🛠 Оставить заявку"), KeyboardButton(text="💰 Прайс")],
@@ -31,7 +32,6 @@ main_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура районов Новосибирска
 districts_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Центральный"), KeyboardButton(text="Железнодорожный")],
@@ -72,7 +72,6 @@ skip_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура для отправки телефона в 1 клик
 contact_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📱 Поделиться контактом", request_contact=True)],
@@ -116,7 +115,6 @@ async def show_price(message: Message):
         reply_markup=main_keyboard
     )
 
-# --- Логика создания заявки ---
 @router.message(F.text == "🛠 Оставить заявку")
 async def start_order(message: Message, state: FSMContext):
     await state.set_state(RepairOrder.waiting_for_district)
@@ -261,7 +259,7 @@ async def finalize_order(message: Message, state: FSMContext, contact: str):
         logging.error(f"Failed to send order to admin: {e}")
 
     await message.answer(
-        "Спасибо! Ваша заявка принята. Мастер свяжется с вами в ближайшее время.",
+        "Спасибо! Ваша заявка принята. Мастер свяжется с вами в ближайшее время, если этого не произошло позвоните по телефону +7 953 804 3048",
         reply_markup=main_keyboard
     )
     await state.clear()
