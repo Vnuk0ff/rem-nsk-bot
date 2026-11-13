@@ -15,6 +15,7 @@ from aiogram.fsm.context import FSMContext
 
 TOKEN = "9255429964:AAGPJ8k9el502n_D8QX0SmpmJYvD5G-Pqmw"
 ADMIN_ID = 6684594078
+CHANNEL_USERNAME = "@A_TOOLSx2"  # Юзернейм твоего канала для проверки подписки через API
 CHANNEL_INVITE_LINK = "https://t.me/+HN5h7aaUEIc3YzQy"
 
 DB_NAME = "service_bot.db"
@@ -136,6 +137,23 @@ contact_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+async def check_subscription(user_id: int) -> bool:
+    if user_id == ADMIN_ID:
+        return True  # Админу подписка не нужна
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        if member.status in ["member", "administrator", "creator"]:
+            return True
+    except Exception as e:
+        logging.error(f"Error checking subscription: {e}")
+    return False
+
+def get_sub_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Подписаться на канал мастера", url=CHANNEL_INVITE_LINK)],
+        [InlineKeyboardButton(text="✅ Я подписался(ась)", callback_data="check_sub")]
+    ])
+
 def save_order(user_id, user_name, district, brand, issue, photo, contact):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -232,6 +250,18 @@ def get_admin_order_markup(order_id, status=""):
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
+    if not await check_subscription(message.from_user.id):
+        await message.answer(
+            "👋 **Добро пожаловать!**\n\n"
+            f"Чтобы пользоваться ботом, пожалуйста, подпишитесь на [наш канал мастера]({CHANNEL_INVITE_LINK}). "
+            "Так вы точно не потеряетесь — здесь всегда можно связаться с мастером напрямую, найти полезные советы по уходу за техникой и быть в курсе всех новостей.\n\n"
+            "Как подпишетесь — нажмите кнопку ниже 👇",
+            reply_markup=get_sub_keyboard(),
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+        return
+
     kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
     await message.answer(
         "Здравствуйте! Я бот-помощник частного мастера по ремонту стиральных машин в Новосибирске.\n\n"
@@ -239,11 +269,52 @@ async def cmd_start(message: Message, state: FSMContext):
         reply_markup=kb
     )
 
-@router.message(F.text == "🔄 В начало")
-async def go_start(message: Message, state: FSMContext):
-    await cmd_start(message, state)
+@router.callback_query(F.data == "check_sub")
+async def process_check_sub(callback: CallbackQuery, state: FSMContext):
+    if await check_subscription(callback.from_user.id):
+        await callback.message.delete()
+        kb = get_admin_keyboard() if callback.from_user.id == ADMIN_ID else main_keyboard
+        await callback.message.answer(
+            "✅ Спасибо за подписку! Рады видеть вас.\n\nВыберите нужный пункт в меню ниже:",
+            reply_markup=kb
+        )
+    else:
+        await callback.answer("❌ Вы еще не подписались на канал. Пожалуйста, подпишитесь, чтобы продолжить!", show_alert=True)
 
-@router.message(F.text == "ℹ️ О нас")
+# Главный барьер: проверка подписки перед выполнением любых текстовых команд
+@router.message()
+async def global_sub_check(message: Message, state: FSMContext):
+    if not await check_subscription(message.from_user.id):
+        await message.answer(
+            "⚠️ **Для использования бота необходима подписка на канал!**\n\n"
+            f"Пожалуйста, подпишитесь на [наш канал мастера]({CHANNEL_INVITE_LINK}), чтобы продолжить работу с ботом:",
+            reply_markup=get_sub_keyboard(),
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+        return
+
+    text = message.text
+    if text == "🔄 В начало":
+        await cmd_start(message, state)
+    elif text == "ℹ️ О нас":
+        await about_us(message)
+    elif text == "💰 Прайс":
+        await show_price(message)
+    elif text == "📜 Мои заказы":
+        await show_user_orders(message)
+    elif text == "📊 Управление заказами (Админ)":
+        await admin_orders_menu(message)
+    elif text == "🛠 Оставить заявку":
+        await start_order(message, state)
+    else:
+        current_state = await state.get_state()
+        if current_state:
+            return
+        else:
+            kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
+            await message.answer("Пожалуйста, воспользуйтесь кнопками меню:", reply_markup=kb)
+
 async def about_us(message: Message):
     kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
     await message.answer(
@@ -257,7 +328,6 @@ async def about_us(message: Message):
         reply_markup=kb
     )
 
-@router.message(F.text == "💰 Прайс")
 async def show_price(message: Message):
     kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
     await message.answer(
@@ -267,7 +337,6 @@ async def show_price(message: Message):
         reply_markup=kb
     )
 
-@router.message(F.text == "📜 Мои заказы")
 async def show_user_orders(message: Message):
     orders = get_user_orders(message.from_user.id)
     if not orders:
@@ -374,7 +443,6 @@ async def start_order_by_callback(message: Message, state: FSMContext):
     await state.set_state(RepairOrder.waiting_for_district)
     await message.answer("Шаг 1 из 5: Выберите ваш район города (или область):", reply_markup=districts_keyboard)
 
-@router.message(F.text == "📊 Управление заказами (Админ)")
 async def admin_orders_menu(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
@@ -442,7 +510,6 @@ async def admin_view_warranty(callback: CallbackQuery):
     await callback.message.answer(warranty_ticket, parse_mode="Markdown")
     await callback.answer()
 
-@router.message(F.text == "🛠 Оставить заявку")
 async def start_order(message: Message, state: FSMContext):
     await state.set_state(RepairOrder.waiting_for_district)
     await message.answer("Шаг 1 из 5: Выберите ваш район города (или область):", reply_markup=districts_keyboard)
