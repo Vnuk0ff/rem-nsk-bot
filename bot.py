@@ -288,25 +288,40 @@ async def process_check_sub(callback: CallbackQuery, state: FSMContext):
 # Глобальный барьер подписки
 @router.message()
 async def global_sub_check(message: Message, state: FSMContext):
+    # ЕСЛИ ПОЛЬЗОВАТЕЛЬ НАХОДИТСЯ В ЛЮБОМ АКТИВНОМ СОСТОЯНИИ FSM (заполняет заявку, гарантию или отзыв) —
+    # МЫ ВООБЩЕ НЕ ТРОГАЕМ СООБЩЕНИЕ, ПУСТЬ ЕГО ОБРАБАТЫВАЮТ СПЕЦИАЛЬНЫЕ ШАГИ!
     current_state = await state.get_state()
-    # Если пользователь находится внутри шагов создания отзыва или заявки — пропускаем проверку текста
-    if current_state in [
-        ReviewState.waiting_for_rating.state, 
-        ReviewState.waiting_for_text.state, 
-        ReviewState.waiting_for_photo.state,
-        RepairOrder.waiting_for_district.state,
-        RepairOrder.waiting_for_brand.state,
-        RepairOrder.waiting_for_custom_brand.state,
-        RepairOrder.waiting_for_issue.state,
-        RepairOrder.waiting_for_custom_issue.state,
-        RepairOrder.waiting_for_photo.state,
-        RepairOrder.waiting_for_contact.state,
-        RepairOrder.preview_order.state,
-        AdminWarrantyFill.waiting_for_price.state,
-        AdminWarrantyFill.waiting_for_period.state,
-        AdminWarrantyFill.waiting_for_details.state
-    ]:
+    if current_state is not None:
         return
+
+    # Проверка подписки для обычных сообщений из меню
+    if not await check_subscription(message.from_user.id):
+        await message.answer(
+            "⚠️ **Для использования бота необходима подписка на канал!**\n\n"
+            f"Пожалуйста, подпишитесь на [наш канал мастера]({CHANNEL_INVITE_LINK}), чтобы продолжить работу с ботом:",
+            reply_markup=get_sub_keyboard(),
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+        return
+
+    text = message.text
+    if text == "🔄 В начало":
+        await cmd_start(message, state)
+    elif text == "ℹ️ О нас":
+        await about_us(message)
+    elif text == "💰 Прайс":
+        await show_price(message)
+    elif text == "📜 Мои заказы":
+        await show_user_orders(message)
+    elif text == "📊 Управление заказами (Админ)":
+        await admin_orders_menu(message)
+    elif text == "🛠 Оставить заявку":
+        await start_order(message, state)
+    else:
+        kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
+        await message.answer("Пожалуйста, воспользуйтесь кнопками меню:", reply_markup=kb)
+
 
     if not await check_subscription(message.from_user.id):
         await message.answer(
