@@ -15,7 +15,7 @@ from aiogram.fsm.context import FSMContext
 
 TOKEN = "9255429964:AAGPJ8k9el502n_D8QX0SmpmJYvD5G-Pqmw"
 ADMIN_ID = 6684594078
-CHANNEL_USERNAME = "@A_TOOLSx2"  # Юзернейм твоего канала для проверки подписки через API
+CHANNEL_USERNAME = "@master_Vnukoff"
 CHANNEL_INVITE_LINK = "https://t.me/+HN5h7aaUEIc3YzQy"
 
 DB_NAME = "service_bot.db"
@@ -61,10 +61,14 @@ class RepairOrder(StatesGroup):
     preview_order = State()
 
 class AdminWarrantyFill(StatesGroup):
-    waiting_for_order_id = State()
     waiting_for_price = State()
     waiting_for_period = State()
     waiting_for_details = State()
+
+class ReviewState(StatesGroup):
+    waiting_for_rating = State()
+    waiting_for_text = State()
+    waiting_for_photo = State()
 
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
@@ -281,9 +285,29 @@ async def process_check_sub(callback: CallbackQuery, state: FSMContext):
     else:
         await callback.answer("❌ Вы еще не подписались на канал. Пожалуйста, подпишитесь, чтобы продолжить!", show_alert=True)
 
-# Главный барьер: проверка подписки перед выполнением любых текстовых команд
+# Глобальный барьер подписки
 @router.message()
 async def global_sub_check(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    # Если пользователь находится внутри шагов создания отзыва или заявки — пропускаем проверку текста
+    if current_state in [
+        ReviewState.waiting_for_rating.state, 
+        ReviewState.waiting_for_text.state, 
+        ReviewState.waiting_for_photo.state,
+        RepairOrder.waiting_for_district.state,
+        RepairOrder.waiting_for_brand.state,
+        RepairOrder.waiting_for_custom_brand.state,
+        RepairOrder.waiting_for_issue.state,
+        RepairOrder.waiting_for_custom_issue.state,
+        RepairOrder.waiting_for_photo.state,
+        RepairOrder.waiting_for_contact.state,
+        RepairOrder.preview_order.state,
+        AdminWarrantyFill.waiting_for_price.state,
+        AdminWarrantyFill.waiting_for_period.state,
+        AdminWarrantyFill.waiting_for_details.state
+    ]:
+        return
+
     if not await check_subscription(message.from_user.id):
         await message.answer(
             "⚠️ **Для использования бота необходима подписка на канал!**\n\n"
@@ -308,12 +332,8 @@ async def global_sub_check(message: Message, state: FSMContext):
     elif text == "🛠 Оставить заявку":
         await start_order(message, state)
     else:
-        current_state = await state.get_state()
-        if current_state:
-            return
-        else:
-            kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
-            await message.answer("Пожалуйста, воспользуйтесь кнопками меню:", reply_markup=kb)
+        kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
+        await message.answer("Пожалуйста, воспользуйтесь кнопками меню:", reply_markup=kb)
 
 async def about_us(message: Message):
     kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
@@ -369,6 +389,7 @@ async def show_user_orders(message: Message):
             )
             markup = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🛡 Обратиться по гарантии", callback_data=f"warranty_claim_{o_id}")],
+                [InlineKeyboardButton(text="⭐ Оценить работу мастера", callback_data=f"start_review_{o_id}")],
                 [InlineKeyboardButton(text="🛠 Создать новую заявку", callback_data="new_order_from_history")]
             ])
         
@@ -377,6 +398,96 @@ async def show_user_orders(message: Message):
             await message.answer(text, reply_markup=markup, parse_mode="Markdown")
         else:
             await message.answer(text, parse_mode="Markdown")
+
+# --- ЛОГИКА СБОРА ОТЗЫВОВ (#карандаш1) ---
+@router.callback_query(F.data.startswith("start_review_"))
+async def review_start(callback: CallbackQuery, state: FSMContext):
+    order_id = callback.data.split("_")[2]
+    await state.update_data(review_order_id=order_id)
+    await state.set_state(ReviewState.waiting_for_rating)
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⭐", callback_data="rate_1"),
+            InlineKeyboardButton(text="⭐⭐", callback_data="rate_2"),
+            InlineKeyboardButton(text="⭐⭐⭐", callback_data="rate_3"),
+            InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data="rate_4"),
+            InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data="rate_5")
+        ]
+    ])
+    await callback.message.answer("Шаг 1 из 3: Пожалуйста, поставьте оценку от 1 до 5 звезд:", reply_markup=markup)
+    await callback.answer()
+
+@router.callback_query(ReviewState.waiting_for_rating, F.data.startswith("rate_"))
+async def review_receive_rating(callback: CallbackQuery, state: FSMContext):
+    rating_num = int(callback.data.split("_")[1])
+    stars = "⭐" * rating_num
+    await state.update_data(rating=stars)
+    await state.set_state(ReviewState.waiting_for_text)
+    
+    await callback.message.edit_text(f"Вы выбрали оценку: {stars}\n\nШаг 2 из 3: Напишите пару слов о проведенном ремонте:")
+    await callback.answer()
+
+@router.message(ReviewState.waiting_for_text)
+async def review_receive_text(message: Message, state: FSMContext):
+    await state.update_data(review_text=message.text)
+    await state.set_state(ReviewState.waiting_for_photo)
+    
+    skip_photo_kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Пропустить фото")]],
+        resize_keyboard=True
+    )
+    await message.answer("Шаг 3 из 3: Прикрепите фото отремонтированной техники (или нажмите «Пропустить фото»):", reply_markup=skip_keyboard)
+
+@router.message(ReviewState.waiting_for_photo, F.photo)
+async def review_receive_photo(message: Message, state: FSMContext):
+    photo_id = message.photo[-1].file_id
+    await state.update_data(review_photo=photo_id)
+    await publish_review_to_channel(message, state)
+
+@router.message(ReviewState.waiting_for_photo, F.text == "Пропустить фото")
+async def review_skip_photo(message: Message, state: FSMContext):
+    await state.update_data(review_photo=None)
+    await publish_review_to_channel(message, state)
+
+async def publish_review_to_channel(message: Message, state: FSMContext):
+    data = await state.get_data()
+    order_id = data.get("review_order_id")
+    order = get_order_by_id(order_id)
+    
+    user = message.from_user
+    username_str = f"@{user.username}" if user.username else user.first_name
+    
+    brand = order[4] if order else "Не указана"
+    rating = data.get("rating")
+    review_text = data.get("review_text")
+    photo_id = data.get("review_photo")
+
+    channel_post = (
+        f"💬 **НОВЫЙ ОТЗЫВ О РАБОТЕ МАСТЕРА**\n\n"
+        f"👤 Клиент: {username_str}\n"
+        f"🏷 Техника: {brand}\n"
+        f"⭐ Оценка: {rating}\n\n"
+        f"📝 «{review_text}»\n\n"
+        f"🛠 Частный ремонт бытовой техники в Новосибирске"
+    )
+
+    kb = get_admin_keyboard() if user.id == ADMIN_ID else main_keyboard
+
+    try:
+        if photo_id:
+            await bot.send_photo(chat_id=CHANNEL_USERNAME, photo=photo_id, caption=channel_post, parse_mode="Markdown")
+        else:
+            await bot.send_message(chat_id=CHANNEL_USERNAME, text=channel_post, parse_mode="Markdown", disable_web_page_preview=True)
+        
+        await message.answer("🌟 **Спасибо большое за ваш отзыв!** Он успешно опубликован в нашем канале.", reply_markup=kb, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Failed to publish review to channel: {e}")
+        await message.answer("🌟 Спасибо за ваш отзыв! (Не удалось отправить в канал, но мастер его ценит).", reply_markup=kb)
+
+    await state.clear()
+
+# --- КОНЕЦ ЛОГИКИ ОТЗЫВОВ ---
 
 @router.callback_query(F.data.startswith("warranty_claim_"))
 async def warranty_claim_callback(callback: CallbackQuery):
@@ -853,7 +964,7 @@ async def admin_confirm_payment(callback: CallbackQuery):
         await bot.send_message(chat_id=user_id, text=warranty_ticket, parse_mode="Markdown")
         await callback.message.edit_text(text=callback.message.text + "\n\n✅ Оплата подтверждена, гарантийный талон выслан клиенту!")
     except Exception as e:
-        await callback.message.answer(f"Ошибка отправки талона клиенту: {e}")
+        await message.answer(f"Ошибка отправки талона клиенту: {e}")
         
     await callback.answer("Оплата подтверждена!")
 
