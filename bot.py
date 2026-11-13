@@ -15,8 +15,7 @@ from aiogram.fsm.context import FSMContext
 
 TOKEN = "9255429964:AAGPJ8k9el502n_D8QX0SmpmJYvD5G-Pqmw"
 ADMIN_ID = 6684594078
-# ID или username твоего канала (для проверки подписки)
-CHANNEL_USERNAME = "@A_TOOLSx2"  # либо числовой ID канала, если юзернейма нет
+CHANNEL_USERNAME = "@A_TOOLSx2"
 CHANNEL_INVITE_LINK = "https://t.me/+HN5h7aaUEIc3YzQy"
 
 DB_NAME = "service_bot.db"
@@ -138,20 +137,17 @@ contact_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Функция проверки подписки на канал
 async def check_subscription(user_id: int) -> bool:
     if user_id == ADMIN_ID:
-        return True  дмину подписка не обязательна
+        return True  # Админу подписка не обязательна
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        # Статусы, при которых пользователь считается подписанным
         if member.status in ["member", "administrator", "creator"]:
             return True
     except Exception as e:
         logging.error(f"Error checking subscription: {e}")
     return False
 
-# Клавиатура с запросом подписки
 def get_sub_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_INVITE_LINK)],
@@ -270,7 +266,6 @@ async def cmd_start(message: Message, state: FSMContext):
         reply_markup=kb
     )
 
-# Проверка подписки по инлайн-кнопке
 @router.callback_query(F.data == "check_sub")
 async def process_check_sub(callback: CallbackQuery, state: FSMContext):
     if await check_subscription(callback.from_user.id):
@@ -283,7 +278,6 @@ async def process_check_sub(callback: CallbackQuery, state: FSMContext):
     else:
         await callback.answer("❌ Вы еще не подписались на канал!", show_alert=True)
 
-# Универсальный мидлварь/проверка перед обработкой текстовых кнопок
 @router.message()
 async def check_user_access(message: Message, state: FSMContext):
     user_id = message.from_user.id
@@ -296,7 +290,6 @@ async def check_user_access(message: Message, state: FSMContext):
         )
         return
 
-    # Обработка основных текстовых команд меню
     text = message.text
     if text == "🔄 В начало":
         await cmd_start(message, state)
@@ -311,10 +304,8 @@ async def check_user_access(message: Message, state: FSMContext):
     elif text == "🛠 Оставить заявку":
         await start_order(message, state)
     else:
-        # Проверяем текущее состояние FSM (если пользователь вводит текст внутри сценария заявки)
         current_state = await state.get_state()
         if current_state:
-            # Передаем управление хендлерам состояний
             return
         else:
             kb = get_admin_keyboard() if user_id == ADMIN_ID else main_keyboard
