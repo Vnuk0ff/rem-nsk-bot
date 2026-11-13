@@ -13,7 +13,7 @@ from aiogram.types import (
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-TOKEN = "9255429964:AAFUMdzsDqgJs4Ie6NEnQfTSR9VOffz-WG0"
+TOKEN = "9255429964:AAGPJ8k9el502n_D8QX0SmpmJYvD5G-Pqmw"  # Здесь твой токен
 ADMIN_ID = 6684594078
 CHANNEL_USERNAME = "@master_Vnukoff"
 CHANNEL_INVITE_LINK = "https://t.me/+HN5h7aaUEIc3YzQy"
@@ -285,43 +285,12 @@ async def process_check_sub(callback: CallbackQuery, state: FSMContext):
     else:
         await callback.answer("❌ Вы еще не подписались на канал. Пожалуйста, подпишитесь, чтобы продолжить!", show_alert=True)
 
-# Глобальный барьер подписки
+# ИСПРАВЛЕННЫЙ ГЛОБАЛЬНЫЙ БАРЬЕР: если идет активный процесс FSM, мы вообще не вмешиваемся
 @router.message()
 async def global_sub_check(message: Message, state: FSMContext):
-    # ЕСЛИ ПОЛЬЗОВАТЕЛЬ НАХОДИТСЯ В ЛЮБОМ АКТИВНОМ СОСТОЯНИИ FSM (заполняет заявку, гарантию или отзыв) —
-    # МЫ ВООБЩЕ НЕ ТРОГАЕМ СООБЩЕНИЕ, ПУСТЬ ЕГО ОБРАБАТЫВАЮТ СПЕЦИАЛЬНЫЕ ШАГИ!
     current_state = await state.get_state()
     if current_state is not None:
         return
-
-    # Проверка подписки для обычных сообщений из меню
-    if not await check_subscription(message.from_user.id):
-        await message.answer(
-            "⚠️ **Для использования бота необходима подписка на канал!**\n\n"
-            f"Пожалуйста, подпишитесь на [наш канал мастера]({CHANNEL_INVITE_LINK}), чтобы продолжить работу с ботом:",
-            reply_markup=get_sub_keyboard(),
-            parse_mode="Markdown",
-            disable_web_page_preview=True
-        )
-        return
-
-    text = message.text
-    if text == "🔄 В начало":
-        await cmd_start(message, state)
-    elif text == "ℹ️ О нас":
-        await about_us(message)
-    elif text == "💰 Прайс":
-        await show_price(message)
-    elif text == "📜 Мои заказы":
-        await show_user_orders(message)
-    elif text == "📊 Управление заказами (Админ)":
-        await admin_orders_menu(message)
-    elif text == "🛠 Оставить заявку":
-        await start_order(message, state)
-    else:
-        kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
-        await message.answer("Пожалуйста, воспользуйтесь кнопками меню:", reply_markup=kb)
-
 
     if not await check_subscription(message.from_user.id):
         await message.answer(
@@ -448,10 +417,6 @@ async def review_receive_text(message: Message, state: FSMContext):
     await state.update_data(review_text=message.text)
     await state.set_state(ReviewState.waiting_for_photo)
     
-    skip_photo_kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Пропустить фото")]],
-        resize_keyboard=True
-    )
     await message.answer("Шаг 3 из 3: Прикрепите фото отремонтированной техники (или нажмите «Пропустить фото»):", reply_markup=skip_keyboard)
 
 @router.message(ReviewState.waiting_for_photo, F.photo)
@@ -498,10 +463,9 @@ async def publish_review_to_channel(message: Message, state: FSMContext):
         await message.answer("🌟 **Спасибо большое за ваш отзыв!** Он успешно опубликован в нашем канале.", reply_markup=kb, parse_mode="Markdown")
     except Exception as e:
         logging.error(f"Failed to publish review to channel: {e}")
-        await message.answer("🌟 Спасибо за ваш отзыв! (Не удалось отправить в канал, но мастер его ценит).", reply_markup=kb)
+        await message.answer("🌟 Спасибо за ваш отзыв!", reply_markup=kb)
 
     await state.clear()
-
 # --- КОНЕЦ ЛОГИКИ ОТЗЫВОВ ---
 
 @router.callback_query(F.data.startswith("warranty_claim_"))
