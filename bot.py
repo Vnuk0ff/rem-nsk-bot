@@ -18,13 +18,14 @@ ADMIN_ID = 6684594078
 CHANNEL_USERNAME = "@A_TOOLSx2"
 CHANNEL_INVITE_LINK = "https://t.me/+HN5h7aaUEIc3YzQy"
 
-DB_NAME = "service_bot.db"
+DB_NAME = "/data/service_bot.db"  # База данных на постоянном диске Render
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
 
 def init_db():
+    os.makedirs(os.path.dirname(DB_NAME), exist_ok=True)
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
@@ -278,40 +279,15 @@ async def process_check_sub(callback: CallbackQuery, state: FSMContext):
     else:
         await callback.answer("❌ Вы еще не подписались на канал!", show_alert=True)
 
-@router.message()
-async def check_user_access(message: Message, state: FSMContext):
-    user_id = message.from_user.id
-    if not await check_subscription(user_id):
-        await message.answer(
-            "⚠️ **Для использования бота необходимо подписаться на наш канал!**\n\n"
-            "Подпишитесь на канал, а затем нажмите кнопку «✅ Я подписался(ась)» ниже:",
-            reply_markup=get_sub_keyboard(),
-            parse_mode="Markdown"
-        )
-        return
+# Обработка основных кнопок главного меню
+@router.message(F.text == "🔄 В начало")
+async def go_start(message: Message, state: FSMContext):
+    await cmd_start(message, state)
 
-    text = message.text
-    if text == "🔄 В начало":
-        await cmd_start(message, state)
-    elif text == "ℹ️ О нас":
-        await about_us(message)
-    elif text == "💰 Прайс":
-        await show_price(message)
-    elif text == "📜 Мои заказы":
-        await show_user_orders(message)
-    elif text == "📊 Управление заказами (Админ)":
-        await admin_orders_menu(message)
-    elif text == "🛠 Оставить заявку":
-        await start_order(message, state)
-    else:
-        current_state = await state.get_state()
-        if current_state:
-            return
-        else:
-            kb = get_admin_keyboard() if user_id == ADMIN_ID else main_keyboard
-            await message.answer("Пожалуйста, воспользуйтесь кнопками меню:", reply_markup=kb)
-
+@router.message(F.text == "ℹ️ О нас")
 async def about_us(message: Message):
+    if not await check_subscription(message.from_user.id):
+        return
     kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
     await message.answer(
         "🛠 Частный мастер по ремонту бытовой техники\n\n"
@@ -324,7 +300,10 @@ async def about_us(message: Message):
         reply_markup=kb
     )
 
+@router.message(F.text == "💰 Прайс")
 async def show_price(message: Message):
+    if not await check_subscription(message.from_user.id):
+        return
     kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
     await message.answer(
         "💰 Прайс-лист на ремонт техники\n\n"
@@ -333,7 +312,10 @@ async def show_price(message: Message):
         reply_markup=kb
     )
 
+@router.message(F.text == "📜 Мои заказы")
 async def show_user_orders(message: Message):
+    if not await check_subscription(message.from_user.id):
+        return
     orders = get_user_orders(message.from_user.id)
     if not orders:
         kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
@@ -439,6 +421,7 @@ async def start_order_by_callback(message: Message, state: FSMContext):
     await state.set_state(RepairOrder.waiting_for_district)
     await message.answer("Шаг 1 из 5: Выберите ваш район города (или область):", reply_markup=districts_keyboard)
 
+@router.message(F.text == "📊 Управление заказами (Админ)")
 async def admin_orders_menu(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
@@ -506,7 +489,17 @@ async def admin_view_warranty(callback: CallbackQuery):
     await callback.message.answer(warranty_ticket, parse_mode="Markdown")
     await callback.answer()
 
+# --- ПОШАГОВОЕ СОЗДАНИЕ ЗАЯВКИ ---
+@router.message(F.text == "🛠 Оставить заявку")
 async def start_order(message: Message, state: FSMContext):
+    if not await check_subscription(message.from_user.id):
+        await message.answer(
+            "⚠️ **Для использования бота необходимо подписаться на наш канал!**\n\n"
+            "Подпишитесь на канал, а затем нажмите кнопку «✅ Я подписался(ась)» ниже:",
+            reply_markup=get_sub_keyboard(),
+            parse_mode="Markdown"
+        )
+        return
     await state.set_state(RepairOrder.waiting_for_district)
     await message.answer("Шаг 1 из 5: Выберите ваш район города (или область):", reply_markup=districts_keyboard)
 
