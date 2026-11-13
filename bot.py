@@ -13,7 +13,7 @@ from aiogram.types import (
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-TOKEN = "9255429964:AAGPJ8k9el502n_D8QX0SmpmJYvD5G-Pqmw"  # Здесь твой токен
+TOKEN = "9255429964:AAFUMdzsDqgJs4Ie6NEnQfTSR9VOffz-WG0"  # Здесь твой токен
 ADMIN_ID = 6684594078
 CHANNEL_USERNAME = "@master_Vnukoff"
 CHANNEL_INVITE_LINK = "https://t.me/+HN5h7aaUEIc3YzQy"
