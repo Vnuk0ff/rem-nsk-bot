@@ -15,17 +15,15 @@ from aiogram.fsm.context import FSMContext
 
 TOKEN = "9255429964:AAGPJ8k9el502n_D8QX0SmpmJYvD5G-Pqmw"
 ADMIN_ID = 6684594078
-CHANNEL_USERNAME = "@A_TOOLSx2"
 CHANNEL_INVITE_LINK = "https://t.me/+HN5h7aaUEIc3YzQy"
 
-DB_NAME = "/data/service_bot.db"  # База данных на постоянном диске Render
+DB_NAME = "service_bot.db"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
 
 def init_db():
-    os.makedirs(os.path.dirname(DB_NAME), exist_ok=True)
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
@@ -138,23 +136,6 @@ contact_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-async def check_subscription(user_id: int) -> bool:
-    if user_id == ADMIN_ID:
-        return True  # Админу подписка не обязательна
-    try:
-        member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        if member.status in ["member", "administrator", "creator"]:
-            return True
-    except Exception as e:
-        logging.error(f"Error checking subscription: {e}")
-    return False
-
-def get_sub_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_INVITE_LINK)],
-        [InlineKeyboardButton(text="✅ Я подписался(ась)", callback_data="check_sub")]
-    ])
-
 def save_order(user_id, user_name, district, brand, issue, photo, contact):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -251,15 +232,6 @@ def get_admin_order_markup(order_id, status=""):
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    if not await check_subscription(message.from_user.id):
-        await message.answer(
-            "⚠️ **Для использования бота необходимо подписаться на наш канал!**\n\n"
-            "Подпишитесь на канал, а затем нажмите кнопку «✅ Я подписался(ась)» ниже:",
-            reply_markup=get_sub_keyboard(),
-            parse_mode="Markdown"
-        )
-        return
-
     kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
     await message.answer(
         "Здравствуйте! Я бот-помощник частного мастера по ремонту стиральных машин в Новосибирске.\n\n"
@@ -267,27 +239,12 @@ async def cmd_start(message: Message, state: FSMContext):
         reply_markup=kb
     )
 
-@router.callback_query(F.data == "check_sub")
-async def process_check_sub(callback: CallbackQuery, state: FSMContext):
-    if await check_subscription(callback.from_user.id):
-        await callback.message.delete()
-        kb = get_admin_keyboard() if callback.from_user.id == ADMIN_ID else main_keyboard
-        await callback.message.answer(
-            "✅ Спасибо за подписку! Добро пожаловать.\n\nВыберите нужный пункт в меню ниже:",
-            reply_markup=kb
-        )
-    else:
-        await callback.answer("❌ Вы еще не подписались на канал!", show_alert=True)
-
-# Обработка основных кнопок главного меню
 @router.message(F.text == "🔄 В начало")
 async def go_start(message: Message, state: FSMContext):
     await cmd_start(message, state)
 
 @router.message(F.text == "ℹ️ О нас")
 async def about_us(message: Message):
-    if not await check_subscription(message.from_user.id):
-        return
     kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
     await message.answer(
         "🛠 Частный мастер по ремонту бытовой техники\n\n"
@@ -302,8 +259,6 @@ async def about_us(message: Message):
 
 @router.message(F.text == "💰 Прайс")
 async def show_price(message: Message):
-    if not await check_subscription(message.from_user.id):
-        return
     kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
     await message.answer(
         "💰 Прайс-лист на ремонт техники\n\n"
@@ -314,8 +269,6 @@ async def show_price(message: Message):
 
 @router.message(F.text == "📜 Мои заказы")
 async def show_user_orders(message: Message):
-    if not await check_subscription(message.from_user.id):
-        return
     orders = get_user_orders(message.from_user.id)
     if not orders:
         kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
@@ -489,17 +442,8 @@ async def admin_view_warranty(callback: CallbackQuery):
     await callback.message.answer(warranty_ticket, parse_mode="Markdown")
     await callback.answer()
 
-# --- ПОШАГОВОЕ СОЗДАНИЕ ЗАЯВКИ ---
 @router.message(F.text == "🛠 Оставить заявку")
 async def start_order(message: Message, state: FSMContext):
-    if not await check_subscription(message.from_user.id):
-        await message.answer(
-            "⚠️ **Для использования бота необходимо подписаться на наш канал!**\n\n"
-            "Подпишитесь на канал, а затем нажмите кнопку «✅ Я подписался(ась)» ниже:",
-            reply_markup=get_sub_keyboard(),
-            parse_mode="Markdown"
-        )
-        return
     await state.set_state(RepairOrder.waiting_for_district)
     await message.answer("Шаг 1 из 5: Выберите ваш район города (или область):", reply_markup=districts_keyboard)
 
