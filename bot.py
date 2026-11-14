@@ -133,6 +133,15 @@ skip_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+stars_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="⭐"), KeyboardButton(text="⭐⭐"), KeyboardButton(text="⭐⭐⭐")],
+        [KeyboardButton(text="⭐⭐⭐⭐"), KeyboardButton(text="⭐⭐⭐⭐⭐")],
+        [KeyboardButton(text="🔄 В начало")]
+    ],
+    resize_keyboard=True
+)
+
 contact_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📱 Поделиться контактом", request_contact=True)],
@@ -251,7 +260,6 @@ def get_admin_order_markup(order_id, status=""):
         
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- СНАЧАЛА ОБРАБОТЧИКИ СОСТОЯНИЙ И КОМАНД (ВЫСШИЙ ПРИОРИТЕТ) ---
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
@@ -286,6 +294,7 @@ async def process_check_sub(callback: CallbackQuery, state: FSMContext):
         )
     else:
         await callback.answer("❌ Вы еще не подписались на канал. Пожалуйста, подпишитесь, чтобы продолжить!", show_alert=True)
+
 
 # ШАГИ ОФОРМЛЕНИЯ ЗАЯВКИ
 @router.message(RepairOrder.waiting_for_district, F.text == "⬅️ Назад")
@@ -450,6 +459,7 @@ async def confirm_and_send_order(message: Message, state: FSMContext):
     )
     await state.clear()
 
+
 # ШАГИ ЗАПОЛНЕНИЯ ГАРАНТИИ (АДМИН)
 @router.message(AdminWarrantyFill.waiting_for_price)
 async def process_warranty_price(message: Message, state: FSMContext):
@@ -508,9 +518,25 @@ async def process_warranty_details(message: Message, state: FSMContext):
 
     await state.clear()
 
-# ШАГИ ОТЗЫВОВ
+
+# ШАГИ ОТЗЫВОВ (С ОЦЕНКОЙ ЧЕРЕЗ REPLY-КЛАВИАТУРУ)
+@router.message(ReviewState.waiting_for_rating, F.text.in_(["⭐", "⭐⭐", "⭐⭐⭐", "⭐⭐⭐⭐", "⭐⭐⭐⭐⭐"]))
+async def review_receive_rating_reply(message: Message, state: FSMContext):
+    stars = message.text
+    await state.update_data(rating=stars)
+    await state.set_state(ReviewState.waiting_for_text)
+    
+    kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
+    await message.answer(
+        f"Вы выбрали оценку: {stars}\n\nШаг 2 из 3: Напишите пару слов о проведенном ремонте:",
+        reply_markup=kb
+    )
+
 @router.message(ReviewState.waiting_for_text)
 async def review_receive_text(message: Message, state: FSMContext):
+    if message.text == "🔄 В начало":
+        await cmd_start(message, state)
+        return
     await state.update_data(review_text=message.text)
     await state.set_state(ReviewState.waiting_for_photo)
     
@@ -692,26 +718,10 @@ async def review_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(review_order_id=order_id)
     await state.set_state(ReviewState.waiting_for_rating)
     
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="⭐", callback_data="rate_1"),
-            InlineKeyboardButton(text="⭐⭐", callback_data="rate_2"),
-            InlineKeyboardButton(text="⭐⭐⭐", callback_data="rate_3"),
-            InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data="rate_4"),
-            InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data="rate_5")
-        ]
-    ])
-    await callback.message.answer("Шаг 1 из 3: Пожалуйста, поставьте оценку от 1 до 5 звезд:", reply_markup=markup)
-    await callback.answer()
-
-@router.callback_query(ReviewState.waiting_for_rating, F.data.startswith("rate_"))
-async def review_receive_rating(callback: CallbackQuery, state: FSMContext):
-    rating_num = int(callback.data.split("_")[1])
-    stars = "⭐" * rating_num
-    await state.update_data(rating=stars)
-    await state.set_state(ReviewState.waiting_for_text)
-    
-    await callback.message.edit_text(f"Вы выбрали оценку: {stars}\n\nШаг 2 из 3: Напишите пару слов о проведенном ремонте:")
+    await callback.message.answer(
+        "Шаг 1 из 3: Пожалуйста, выберите оценку на клавиатуре снизу:", 
+        reply_markup=stars_keyboard
+    )
     await callback.answer()
 
 @router.callback_query(F.data.startswith("warranty_claim_"))
@@ -913,16 +923,21 @@ async def admin_confirm_payment(callback: CallbackQuery):
         f"Сохраните этот талон. По вопросам гарантии обращайтесь в бот."
     )
 
+    ticket_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🛡 Обратиться по гарантии", callback_data=f"warranty_claim_{order_id}")],
+        [InlineKeyboardButton(text="⭐ Оценить работу мастера", callback_data=f"start_review_{order_id}")]
+    ])
+
     try:
-        await bot.send_message(chat_id=user_id, text=warranty_ticket, parse_mode="Markdown")
-        await callback.message.edit_text(text=callback.message.text + "\n\n✅ Оплата подтверждена, гарантийный талон выслан клиенту!")
+        await bot.send_message(chat_id=user_id, text=warranty_ticket, reply_markup=ticket_markup, parse_mode="Markdown")
+        await callback.message.edit_text(text=callback.message.text + "\n\n✅ Оплата подтверждена, гарантийный талон с кнопками выслан клиенту!")
     except Exception as e:
-        await message.answer(f"Ошибка отправки талона клиенту: {e}")
+        await callback.message.answer(f"Ошибка отправки талона клиенту: {e}")
         
     await callback.answer("Оплата подтверждена!")
 
 
-# --- ГЛОБАЛЬНЫЙ ХЕНДЛЕР МЕНЮ (СТАВИМ В САМЫЙ КОНЕЦ, ЧТОБЫ ОН НЕ ПЕРЕХВАТЫВАЛ FSM) ---
+# --- ГЛОБАЛЬНЫЙ ХЕНДЛЕР МЕНЮ ---
 
 @router.message()
 async def global_sub_check(message: Message, state: FSMContext):
