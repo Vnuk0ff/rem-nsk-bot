@@ -18,7 +18,7 @@ from aiogram.fsm.context import FSMContext
 # Конфигурация
 TOKEN = "9255429964:AAFUMdzsDqgJs4Ie6NEnQfTSR9VOffz-WG0"
 ADMIN_ID = 6684594078
-CHANNEL_USERNAME = -1004465523357  # Числовой ID канала
+CHANNEL_USERNAME = -1004465523357  # Точный числовой ID канала
 CHANNEL_INVITE_LINK = "https://t.me/+HN5h7aaUEIc3YzQy"
 
 DB_NAME = "service_bot.db"
@@ -102,6 +102,17 @@ def get_admin_keyboard():
         resize_keyboard=True
     )
 
+# Массив популярных брендов для быстрой и удобной вставки
+brands_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Samsung"), KeyboardButton(text="LG"), KeyboardButton(text="Bosch")],
+        [KeyboardButton(text="Indesit"), KeyboardButton(text="Ariston"), KeyboardButton(text="Beko")],
+        [KeyboardButton(text="Candy"), KeyboardButton(text="Atlant"), KeyboardButton(text="Electrolux")],
+        [KeyboardButton(text="Другая марка"), KeyboardButton(text="🔙 В начало")]
+    ],
+    resize_keyboard=True
+)
+
 district_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Центральный"), KeyboardButton(text="Октябрьский")],
@@ -180,24 +191,27 @@ async def cancel_to_start(message: Message, state: FSMContext):
 @router.message(F.text == "ℹ️ О нас")
 async def about_us(message: Message):
     text = (
-        "🛠 <b>Частный мастер по ремонту стиральных машин в Новосибирске</b>\n\n"
-        "• Бесплатный выезд и диагностика\n"
-        "• Гарантия на работы до 1 года\n"
-        "• Оплата после проверки работы\n\n"
-        "📞 Телефон: +7 (953) 804-30-48\n"
-        "📢 Наш канал: @master_Vnukoff"
+        "🛠 <b>Частный мастер по ремонту бытовой техники в Новосибирске</b>\n\n"
+        "• Бесплатный выезд и диагностика на дому\n"
+        "• Профессиональное оборудование и запчасти в наличии\n"
+        "• Официальная гарантия на все виды работ до 1 года\n"
+        "• Честные цены и оплата только после проверки\n\n"
+        "📞 Телефон для связи: +7 (953) 804-30-48\n"
+        "📢 Наш канал с отзывами: @master_Vnukoff"
     )
     await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
 
 @router.message(F.text == "💰 Прайс")
 async def show_price(message: Message):
     text = (
-        "💰 <b>Примерные цены на ремонт:</b>\n\n"
-        "• Диагностика и выезд — <b>0 руб.</b> (при ремонте)\n"
-        "• Замена сливного насоса — от 800 руб.\n"
-        "• Замена ТЭНа — от 1000 руб.\n"
-        "• Замена подшипников — от 2500 руб.\n"
-        "• Ремонт модуля управления — от 1500 руб."
+        "💰 <b>Актуальный прайс-лист на ремонт стиральных машин:</b>\n\n"
+        "• Выезд мастера и диагностика — <b>0 руб.</b> (при согласии на ремонт)\n"
+        "• Устранение засор/слив воды — от 600 руб.\n"
+        "• Замена сливного насоса (помпы) — от 800 руб.\n"
+        "• Замена ТЭНа (нагревательного элемента) — от 1000 руб.\n"
+        "• Замена манжеты люка — от 1200 руб.\n"
+        "• Ремонт модуля управления — от 1500 руб.\n"
+        "• Замена подшипников — от 2500 руб."
     )
     await message.answer(text, parse_mode="HTML")
 
@@ -205,13 +219,20 @@ async def show_price(message: Message):
 @router.message(F.text == "🛠 Оставить заявку")
 async def start_order(message: Message, state: FSMContext):
     await state.set_state(OrderState.waiting_for_brand)
-    await message.answer("📝 Введите марку вашей стиральной машины (например: Samsung, Bosch, LG):", reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        "📝 Выберите марку вашей стиральной машины из списка ниже или введите свою вручную:",
+        reply_markup=brands_keyboard
+    )
 
 @router.message(OrderState.waiting_for_brand)
 async def process_brand(message: Message, state: FSMContext):
-    await state.update_data(brand=message.text)
+    brand = "Другая" if message.text == "Другая марка" else message.text
+    await state.update_data(brand=brand)
     await state.set_state(OrderState.waiting_for_fault)
-    await message.answer("📝 Опишите кратко проблему (например: не сливает воду, шумит при отжиме):")
+    await message.answer(
+        "📝 Опишите кратко проблему или симптомы (например: не греет воду, шумит при отжиме, выдает ошибку):",
+        reply_markup=ReplyKeyboardRemove()
+    )
 
 @router.message(OrderState.waiting_for_fault)
 async def process_fault(message: Message, state: FSMContext):
@@ -219,11 +240,14 @@ async def process_fault(message: Message, state: FSMContext):
     await state.set_state(OrderState.waiting_for_phone)
     
     phone_kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📱 Поделиться номером", request_contact=True)]],
+        keyboard=[
+            [KeyboardButton(text="📱 Поделиться номером", request_contact=True)],
+            [KeyboardButton(text="🔙 В начало")]
+        ],
         resize_keyboard=True,
         one_time_keyboard=True
     )
-    await message.answer("📞 Укажите ваш контактный телефон или нажмите кнопку ниже:", reply_markup=phone_kb)
+    await message.answer("📞 Укажите ваш контактный телефон для связи или нажмите кнопку ниже:", reply_markup=phone_kb)
 
 @router.message(OrderState.waiting_for_phone, F.contact)
 async def process_phone_contact(message: Message, state: FSMContext):
@@ -257,7 +281,12 @@ async def process_district(message: Message, state: FSMContext):
     conn.close()
 
     kb = get_admin_keyboard() if user.id == ADMIN_ID else main_keyboard
-    await message.answer(f"✅ <b>Заявка №{order_id} успешно оформлена!</b>\nМастер свяжется с вами в ближайшее время.", reply_markup=kb, parse_mode="HTML")
+    await message.answer(
+        f"✅ <b>Заявка №{order_id} успешно оформлена!</b>\n\n"
+        f"Мы приняли ваш заказ. Мастер свяжется с вами в ближайшее время для уточнения деталей.",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
     
     admin_text = (
         f"🚨 <b>НОВАЯ ЗАЯВКА №{order_id}</b>\n\n"
@@ -284,10 +313,10 @@ async def show_user_orders(message: Message):
     conn.close()
 
     if not orders:
-        await message.answer("У вас пока нет активных заказов.")
+        await message.answer("У вас пока нет активных заказов в системе.")
         return
 
-    text = "📦 <b>Ваши последние заказы:</b>\n\n"
+    text = "📦 <b>Ваши последние заявки и ремонты:</b>\n\n"
     for o in orders:
         text += f"🔹 <b>Заявка №{o[0]}</b>\n🏷 Техника: {o[1]}\n📊 Статус: {o[2]}\n📅 Дата: {o[3]}\n\n"
     
