@@ -102,7 +102,6 @@ def get_admin_keyboard():
         resize_keyboard=True
     )
 
-# Массив популярных брендов для быстрой и удобной вставки
 brands_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Samsung"), KeyboardButton(text="LG"), KeyboardButton(text="Bosch")],
