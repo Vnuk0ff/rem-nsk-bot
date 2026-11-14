@@ -143,7 +143,7 @@ contact_keyboard = ReplyKeyboardMarkup(
 
 async def check_subscription(user_id: int) -> bool:
     if user_id == ADMIN_ID:
-        return True  # Админу подписка не нужна
+        return True
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
         if member.status in ["member", "administrator", "creator"]:
@@ -382,7 +382,6 @@ async def show_user_orders(message: Message):
         else:
             await message.answer(text, parse_mode="Markdown")
 
-# --- ЛОГИКА СБОРА ОТЗЫВОВ (#карандаш1) ---
 @router.callback_query(F.data.startswith("start_review_"))
 async def review_start(callback: CallbackQuery, state: FSMContext):
     order_id = callback.data.split("_")[2]
@@ -465,7 +464,6 @@ async def publish_review_to_channel(message: Message, state: FSMContext):
         await message.answer("🌟 Спасибо за ваш отзыв!", reply_markup=kb)
 
     await state.clear()
-# --- КОНЕЦ ЛОГИКИ ОТЗЫВОВ ---
 
 @router.callback_query(F.data.startswith("warranty_claim_"))
 async def warranty_claim_callback(callback: CallbackQuery):
@@ -612,6 +610,7 @@ async def process_district(message: Message, state: FSMContext):
     if message.text == "🔄 В начало":
         await cmd_start(message, state)
         return
+    
     await state.update_data(district=message.text)
     await state.set_state(RepairOrder.waiting_for_brand)
     await message.answer("Шаг 2 из 5: Выберите марку вашей стиральной машины из списка или нажмите «✍️ Другая марка»:", reply_markup=brands_keyboard)
@@ -964,6 +963,11 @@ async def start_web_server():
 async def main():
     logging.basicConfig(level=logging.INFO)
     await start_web_server()
+    
+    # Сбрасываем старые зависшие апдейты при старте
+    await bot.delete_webhook(drop_pending_updates=True)
+    logging.info("Starting polling...")
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
