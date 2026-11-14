@@ -251,6 +251,8 @@ def get_admin_order_markup(order_id, status=""):
         
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# --- СНАЧАЛА ОБРАБОТЧИКИ СОСТОЯНИЙ И КОМАНД (ВЫСШИЙ ПРИОРИТЕТ) ---
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
@@ -285,322 +287,7 @@ async def process_check_sub(callback: CallbackQuery, state: FSMContext):
     else:
         await callback.answer("❌ Вы еще не подписались на канал. Пожалуйста, подпишитесь, чтобы продолжить!", show_alert=True)
 
-@router.message()
-async def global_sub_check(message: Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state is not None:
-        return
-
-    if not await check_subscription(message.from_user.id):
-        await message.answer(
-            "⚠️ **Для использования бота необходима подписка на канал!**\n\n"
-            f"Пожалуйста, подпишитесь на [наш канал мастера]({CHANNEL_INVITE_LINK}), чтобы продолжить работу с ботом:",
-            reply_markup=get_sub_keyboard(),
-            parse_mode="Markdown",
-            disable_web_page_preview=True
-        )
-        return
-
-    text = message.text
-    if text == "🔄 В начало":
-        await cmd_start(message, state)
-    elif text == "ℹ️ О нас":
-        await about_us(message)
-    elif text == "💰 Прайс":
-        await show_price(message)
-    elif text == "📜 Мои заказы":
-        await show_user_orders(message)
-    elif text == "📊 Управление заказами (Админ)":
-        await admin_orders_menu(message)
-    elif text == "🛠 Оставить заявку":
-        await start_order(message, state)
-    else:
-        kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
-        await message.answer("Пожалуйста, воспользуйтесь кнопками меню:", reply_markup=kb)
-
-async def about_us(message: Message):
-    kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
-    await message.answer(
-        "🛠 Частный мастер по ремонту бытовой техники\n\n"
-        "• Работаем по всему Новосибирску и области\n"
-        "• Быстрый выезд и диагностика\n"
-        "• Официальная гарантия на все виды работ\n\n"
-        "📞 Телефон для связи: +7 953 804 3048\n"
-        "💬 Написать мастеру лично: @za_russia_ru\n\n"
-        "Нажмите «🛠 Оставить заявку», чтобы вызвать мастера.",
-        reply_markup=kb
-    )
-
-async def show_price(message: Message):
-    kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
-    await message.answer(
-        "💰 Прайс-лист на ремонт техники\n\n"
-        "Здесь скоро появится актуальный прайс на услуги.\n"
-        "По вопросам стоимости вы всегда можете проконсультироваться у мастера: @za_russia_ru",
-        reply_markup=kb
-    )
-
-async def show_user_orders(message: Message):
-    orders = get_user_orders(message.from_user.id)
-    if not orders:
-        kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
-        await message.answer("У вас пока нет активных или выполненных заказов.", reply_markup=kb)
-        return
-
-    for order in orders:
-        o_id, brand, issue, status, price, period, details, completed_at = order
-        
-        text = (
-            f"🔹 **Заказ №{o_id}**\n"
-            f"🏷 Марка: {brand}\n"
-            f"⚠️ Проблема: {issue}\n"
-            f"📌 Статус: **{status}**\n"
-        )
-        if price:
-            text += f"💰 Сумма: {price} руб.\n"
-            text += f"🔧 Работы: {details}\n"
-        
-        markup = None
-        if status == "Оплачено / Выполнено" and completed_at:
-            rem_days, total_days = calculate_warranty_days(completed_at, period)
-            text += (
-                f"\n📜 **ОФИЦИАЛЬНЫЙ ГАРАНТИЙНЫЙ ТАЛОН**\n"
-                f"📅 Дата выдачи: {completed_at}\n"
-                f"🛡 Срок гарантии: {period}\n"
-                f"⏳ **Осталось дней гарантии: {rem_days} из {total_days} дн.**\n"
-                f"🟢 Статус: Действует\n"
-            )
-            markup = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🛡 Обратиться по гарантии", callback_data=f"warranty_claim_{o_id}")],
-                [InlineKeyboardButton(text="⭐ Оценить работу мастера", callback_data=f"start_review_{o_id}")],
-                [InlineKeyboardButton(text="🛠 Создать новую заявку", callback_data="new_order_from_history")]
-            ])
-        
-        text += "-------------------------\n"
-        if markup:
-            await message.answer(text, reply_markup=markup, parse_mode="Markdown")
-        else:
-            await message.answer(text, parse_mode="Markdown")
-
-@router.callback_query(F.data.startswith("start_review_"))
-async def review_start(callback: CallbackQuery, state: FSMContext):
-    order_id = callback.data.split("_")[2]
-    await state.update_data(review_order_id=order_id)
-    await state.set_state(ReviewState.waiting_for_rating)
-    
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="⭐", callback_data="rate_1"),
-            InlineKeyboardButton(text="⭐⭐", callback_data="rate_2"),
-            InlineKeyboardButton(text="⭐⭐⭐", callback_data="rate_3"),
-            InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data="rate_4"),
-            InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data="rate_5")
-        ]
-    ])
-    await callback.message.answer("Шаг 1 из 3: Пожалуйста, поставьте оценку от 1 до 5 звезд:", reply_markup=markup)
-    await callback.answer()
-
-@router.callback_query(ReviewState.waiting_for_rating, F.data.startswith("rate_"))
-async def review_receive_rating(callback: CallbackQuery, state: FSMContext):
-    rating_num = int(callback.data.split("_")[1])
-    stars = "⭐" * rating_num
-    await state.update_data(rating=stars)
-    await state.set_state(ReviewState.waiting_for_text)
-    
-    await callback.message.edit_text(f"Вы выбрали оценку: {stars}\n\nШаг 2 из 3: Напишите пару слов о проведенном ремонте:")
-    await callback.answer()
-
-@router.message(ReviewState.waiting_for_text)
-async def review_receive_text(message: Message, state: FSMContext):
-    await state.update_data(review_text=message.text)
-    await state.set_state(ReviewState.waiting_for_photo)
-    
-    await message.answer("Шаг 3 из 3: Прикрепите фото отремонтированной техники (или нажмите «Пропустить фото»):", reply_markup=skip_keyboard)
-
-@router.message(ReviewState.waiting_for_photo, F.photo)
-async def review_receive_photo(message: Message, state: FSMContext):
-    photo_id = message.photo[-1].file_id
-    await state.update_data(review_photo=photo_id)
-    await publish_review_to_channel(message, state)
-
-@router.message(ReviewState.waiting_for_photo, F.text == "Пропустить фото")
-async def review_skip_photo(message: Message, state: FSMContext):
-    await state.update_data(review_photo=None)
-    await publish_review_to_channel(message, state)
-
-async def publish_review_to_channel(message: Message, state: FSMContext):
-    data = await state.get_data()
-    order_id = data.get("review_order_id")
-    order = get_order_by_id(order_id)
-    
-    user = message.from_user
-    username_str = f"@{user.username}" if user.username else user.first_name
-    
-    brand = order[4] if order else "Не указана"
-    rating = data.get("rating")
-    review_text = data.get("review_text")
-    photo_id = data.get("review_photo")
-
-    channel_post = (
-        f"💬 **НОВЫЙ ОТЗЫВ О РАБОТЕ МАСТЕРА**\n\n"
-        f"👤 Клиент: {username_str}\n"
-        f"🏷 Техника: {brand}\n"
-        f"⭐ Оценка: {rating}\n\n"
-        f"📝 «{review_text}»\n\n"
-        f"🛠 Частный ремонт бытовой техники в Новосибирске"
-    )
-
-    kb = get_admin_keyboard() if user.id == ADMIN_ID else main_keyboard
-
-    try:
-        if photo_id:
-            await bot.send_photo(chat_id=CHANNEL_USERNAME, photo=photo_id, caption=channel_post, parse_mode="Markdown")
-        else:
-            await bot.send_message(chat_id=CHANNEL_USERNAME, text=channel_post, parse_mode="Markdown", disable_web_page_preview=True)
-        
-        await message.answer("🌟 **Спасибо большое за ваш отзыв!** Он успешно опубликован в нашем канале.", reply_markup=kb, parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"Failed to publish review to channel: {e}")
-        await message.answer("🌟 Спасибо за ваш отзыв!", reply_markup=kb)
-
-    await state.clear()
-
-@router.callback_query(F.data.startswith("warranty_claim_"))
-async def warranty_claim_callback(callback: CallbackQuery):
-    order_id = callback.data.split("_")[2]
-    order = get_order_by_id(order_id)
-    user = callback.from_user
-    
-    completed_date = order[12]
-    period = order[10]
-    rem_days, total_days = calculate_warranty_days(completed_date, period)
-
-    admin_claim_text = (
-        f"🚨 **ОБРАЩЕНИЕ ПО ГАРАНТИИ!**\n\n"
-        f"🆔 Заказ №{order_id}\n"
-        f"👤 Клиент: {user.first_name} (@{user.username if user.username else 'нет'})\n"
-        f"📞 Контакт: {order[7]}\n"
-        f"🏷 Марка: {order[4]}\n"
-        f"🔧 Выполненные ранее работы: {order[11]}\n"
-        f"🛡 Срок гарантии: {period} (Осталось дней: {rem_days} из {total_days})"
-    )
-    
-    confirm_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Подтвердить получение (связаться)", callback_data=f"confirm_claim_{order_id}_{user.id}")]
-    ])
-
-    try:
-        await bot.send_message(chat_id=ADMIN_ID, text=admin_claim_text, reply_markup=confirm_markup, parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"Failed to send warranty claim to admin: {e}")
-
-    await callback.message.edit_text(
-        text=callback.message.text + "\n\n⏳ **Запрос по гарантии отправлен мастеру!** Ожидайте, мастер свяжется с вами.",
-        parse_mode="Markdown"
-    )
-    await callback.answer("Запрос по гарантии отправлен!")
-
-@router.callback_query(F.data.startswith("confirm_claim_"))
-async def admin_confirm_claim(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    parts = callback.data.split("_")
-    order_id = parts[2]
-    user_id = int(parts[3])
-
-    try:
-        await bot.send_message(
-            chat_id=user_id,
-            text=f"🟢 **Мастер успешно уведомлен о вашем обращении по гарантии (Заказ №{order_id})!**\nОн свяжется с вами в ближайшее время.",
-            parse_mode="Markdown"
-        )
-        await callback.message.edit_text(text=callback.message.text + "\n\n✅ Уведомление клиенту отправлено!")
-    except Exception as e:
-        await callback.message.answer(f"Не удалось отправить уведомление клиенту: {e}")
-
-    await callback.answer("Подтверждено!")
-
-@router.callback_query(F.data == "new_order_from_history")
-async def callback_new_order(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("Давайте оформим новую заявку.")
-    await start_order_by_callback(callback.message, state)
-    await callback.answer()
-
-async def start_order_by_callback(message: Message, state: FSMContext):
-    await state.set_state(RepairOrder.waiting_for_district)
-    await message.answer("Шаг 1 из 5: Выберите ваш район города (или область):", reply_markup=districts_keyboard)
-
-async def admin_orders_menu(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📞 Созвон", callback_data="adm_list_Созвон"),
-         InlineKeyboardButton(text="🛠 В работе", callback_data="adm_list_В работе")],
-        [InlineKeyboardButton(text="⚠️ Не ответ", callback_data="adm_list_Не ответ"),
-         InlineKeyboardButton(text="🟢 Готов", callback_data="adm_list_Готов")],
-        [InlineKeyboardButton(text="⏳ Ожидает оплаты", callback_data="adm_list_Ожидает оплаты"),
-         InlineKeyboardButton(text="✅ Оплачено", callback_data="adm_list_Оплачено / Выполнено")]
-    ])
-    await message.answer("📊 Выберите статус заказов, которые хотите просмотреть:", reply_markup=markup)
-
-@router.callback_query(F.data.startswith("adm_list_"))
-async def admin_show_status_list(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    status = callback.data.replace("adm_list_", "")
-    orders = get_orders_by_status(status)
-    
-    if not orders:
-        await callback.message.answer(f"📭 Нет заказов со статусом: *{status}*", parse_mode="Markdown")
-        await callback.answer()
-        return
-
-    await callback.message.answer(f"📋 **Список заказов со статусом: {status}**", parse_mode="Markdown")
-    for o in orders:
-        o_id, u_name, district, brand, issue, contact, price = o
-        text = (
-            f"🆔 **Заказ №{o_id}**\n"
-            f"👤 Клиент: {u_name} ({contact})\n"
-            f"📍 Район: {district}\n"
-            f"🏷 {brand} | ⚠️ {issue}\n"
-        )
-        markup = get_admin_order_markup(o_id, status)
-        await callback.message.answer(text, reply_markup=markup, parse_mode="Markdown")
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("admin_view_warranty_"))
-async def admin_view_warranty(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    order_id = callback.data.split("_")[3]
-    order = get_order_by_id(order_id)
-    
-    completed_date = order[12] if order[12] else datetime.now().strftime("%Y-%m-%d")
-    period = order[10] if order[10] else "1 год"
-    rem_days, total_days = calculate_warranty_days(completed_date, period)
-
-    client_str = str(order[2]) + " (" + str(order[7]) + ")"
-    warranty_ticket = (
-        "📜 **ГАРАНТИЙНЫЙ ТАЛОН (Копия для мастера)**\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Заказ №: {order_id}\n"
-        f"Клиент: {client_str}\n"
-        f"Марка: {order[4]}\n"
-        f"Работы: {order[11]}\n"
-        f"Сумма: {order[9]} руб.\n"
-        f"📅 Дата выдачи: {completed_date}\n"
-        f"🛡 Срок гарантии: {period}\n"
-        f"⏳ **Осталось дней: {rem_days} из {total_days} дн.**\n"
-        f"Статус: {order[8]}\n"
-        "━━━━━━━━━━━━━━━━━━━━━"
-    )
-    await callback.message.answer(warranty_ticket, parse_mode="Markdown")
-    await callback.answer()
-
-async def start_order(message: Message, state: FSMContext):
-    await state.set_state(RepairOrder.waiting_for_district)
-    await message.answer("Шаг 1 из 5: Выберите ваш район города (или область):", reply_markup=districts_keyboard)
-
+# ШАГИ ОФОРМЛЕНИЯ ЗАЯВКИ
 @router.message(RepairOrder.waiting_for_district, F.text == "⬅️ Назад")
 async def back_to_start(message: Message, state: FSMContext):
     await cmd_start(message, state)
@@ -610,7 +297,6 @@ async def process_district(message: Message, state: FSMContext):
     if message.text == "🔄 В начало":
         await cmd_start(message, state)
         return
-    
     await state.update_data(district=message.text)
     await state.set_state(RepairOrder.waiting_for_brand)
     await message.answer("Шаг 2 из 5: Выберите марку вашей стиральной машины из списка или нажмите «✍️ Другая марка»:", reply_markup=brands_keyboard)
@@ -719,32 +405,6 @@ async def process_contact_text(message: Message, state: FSMContext):
     await state.update_data(contact=contact)
     await show_preview(message, state)
 
-async def show_preview(message: Message, state: FSMContext):
-    await state.set_state(RepairOrder.preview_order)
-    data = await state.get_data()
-    
-    preview_text = (
-        f"📋 **Проверьте вашу заявку:**\n\n"
-        f"📍 Район: {data.get('district')}\n"
-        f"🏷 Марка: {data.get('brand')}\n"
-        f"⚠️ Проблема: {data.get('issue')}\n"
-        f"📞 Телефон: {data.get('contact')}\n"
-        f"📷 Фото: {'Прикреплено' if data.get('photo') else 'Не прикреплено'}\n\n"
-        f"Всё верно?"
-    )
-    
-    markup = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="✅ Все верно / Отправить"), KeyboardButton(text="❌ Изменить данные")]
-        ],
-        resize_keyboard=True
-    )
-    
-    if data.get("photo"):
-        await message.answer_photo(photo=data.get("photo"), caption=preview_text, reply_markup=markup, parse_mode="Markdown")
-    else:
-        await message.answer(text=preview_text, reply_markup=markup, parse_mode="Markdown")
-
 @router.message(RepairOrder.preview_order, F.text == "❌ Изменить данные")
 async def restart_order_from_preview(message: Message, state: FSMContext):
     await start_order(message, state)
@@ -790,36 +450,7 @@ async def confirm_and_send_order(message: Message, state: FSMContext):
     )
     await state.clear()
 
-@router.callback_query(F.data.startswith("status_"))
-async def change_status_callback(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    _, order_id, new_status = callback.data.split("_")
-    update_order_status(order_id, new_status)
-    
-    old_text = callback.message.caption if callback.message.photo else callback.message.text
-    base_text = old_text.split("📌 Статус:")[0].strip() if "📌 Статус:" in old_text else old_text.strip()
-    
-    new_admin_text = f"{base_text}\n\n📌 Статус: {new_status}"
-    admin_markup = get_admin_order_markup(order_id, new_status)
-
-    if callback.message.photo:
-        await callback.message.edit_caption(caption=new_admin_text, reply_markup=admin_markup)
-    else:
-        await callback.message.edit_text(text=new_admin_text, reply_markup=admin_markup)
-        
-    await callback.answer(f"Статус изменен на: {new_status}")
-
-@router.callback_query(F.data.startswith("fill_warranty_"))
-async def start_fill_warranty(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    order_id = callback.data.split("_")[2]
-    await state.update_data(warranty_order_id=order_id)
-    await state.set_state(AdminWarrantyFill.waiting_for_price)
-    await callback.message.answer(f"Заполнение гарантии для заказа №{order_id}.\nВведите итоговую стоимость ремонта (руб):")
-    await callback.answer()
-
+# ШАГИ ЗАПОЛНЕНИЯ ГАРАНТИИ (АДМИН)
 @router.message(AdminWarrantyFill.waiting_for_price)
 async def process_warranty_price(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
@@ -876,6 +507,351 @@ async def process_warranty_details(message: Message, state: FSMContext):
         await message.answer(f"Ошибка при отправке клиенту: {e}")
 
     await state.clear()
+
+# ШАГИ ОТЗЫВОВ
+@router.message(ReviewState.waiting_for_text)
+async def review_receive_text(message: Message, state: FSMContext):
+    await state.update_data(review_text=message.text)
+    await state.set_state(ReviewState.waiting_for_photo)
+    
+    await message.answer("Шаг 3 из 3: Прикрепите фото отремонтированной техники (или нажмите «Пропустить фото»):", reply_markup=skip_keyboard)
+
+@router.message(ReviewState.waiting_for_photo, F.photo)
+async def review_receive_photo(message: Message, state: FSMContext):
+    photo_id = message.photo[-1].file_id
+    await state.update_data(review_photo=photo_id)
+    await publish_review_to_channel(message, state)
+
+@router.message(ReviewState.waiting_for_photo, F.text == "Пропустить фото")
+async def review_skip_photo(message: Message, state: FSMContext):
+    await state.update_data(review_photo=None)
+    await publish_review_to_channel(message, state)
+
+
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+async def about_us(message: Message):
+    kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
+    await message.answer(
+        "🛠 Частный мастер по ремонту бытовой техники\n\n"
+        "• Работаем по всему Новосибирску и области\n"
+        "• Быстрый выезд и диагностика\n"
+        "• Официальная гарантия на все виды работ\n\n"
+        "📞 Телефон для связи: +7 953 804 3048\n"
+        "💬 Написать мастеру лично: @za_russia_ru\n\n"
+        "Нажмите «🛠 Оставить заявку», чтобы вызвать мастера.",
+        reply_markup=kb
+    )
+
+async def show_price(message: Message):
+    kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
+    await message.answer(
+        "💰 Прайс-лист на ремонт техники\n\n"
+        "Здесь скоро появится актуальный прайс на услуги.\n"
+        "По вопросам стоимости вы всегда можете проконсультироваться у мастера: @za_russia_ru",
+        reply_markup=kb
+    )
+
+async def show_user_orders(message: Message):
+    orders = get_user_orders(message.from_user.id)
+    if not orders:
+        kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
+        await message.answer("У вас пока нет активных или выполненных заказов.", reply_markup=kb)
+        return
+
+    for order in orders:
+        o_id, brand, issue, status, price, period, details, completed_at = order
+        
+        text = (
+            f"🔹 **Заказ №{o_id}**\n"
+            f"🏷 Марка: {brand}\n"
+            f"⚠️ Проблема: {issue}\n"
+            f"📌 Статус: **{status}**\n"
+        )
+        if price:
+            text += f"💰 Сумма: {price} руб.\n"
+            text += f"🔧 Работы: {details}\n"
+        
+        markup = None
+        if status == "Оплачено / Выполнено" and completed_at:
+            rem_days, total_days = calculate_warranty_days(completed_at, period)
+            text += (
+                f"\n📜 **ОФИЦИАЛЬНЫЙ ГАРАНТИЙНЫЙ ТАЛОН**\n"
+                f"📅 Дата выдачи: {completed_at}\n"
+                f"🛡 Срок гарантии: {period}\n"
+                f"⏳ **Осталось дней гарантии: {rem_days} из {total_days} дн.**\n"
+                f"🟢 Статус: Действует\n"
+            )
+            markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🛡 Обратиться по гарантии", callback_data=f"warranty_claim_{o_id}")],
+                [InlineKeyboardButton(text="⭐ Оценить работу мастера", callback_data=f"start_review_{o_id}")],
+                [InlineKeyboardButton(text="🛠 Создать новую заявку", callback_data="new_order_from_history")]
+            ])
+        
+        text += "-------------------------\n"
+        if markup:
+            await message.answer(text, reply_markup=markup, parse_mode="Markdown")
+        else:
+            await message.answer(text, parse_mode="Markdown")
+
+async def start_order(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.waiting_for_district)
+    await message.answer("Шаг 1 из 5: Выберите ваш район города (или область):", reply_markup=districts_keyboard)
+
+async def start_order_by_callback(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.waiting_for_district)
+    await message.answer("Шаг 1 из 5: Выберите ваш район города (или область):", reply_markup=districts_keyboard)
+
+async def admin_orders_menu(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📞 Созвон", callback_data="adm_list_Созвон"),
+         InlineKeyboardButton(text="🛠 В работе", callback_data="adm_list_В работе")],
+        [InlineKeyboardButton(text="⚠️ Не ответ", callback_data="adm_list_Не ответ"),
+         InlineKeyboardButton(text="🟢 Готов", callback_data="adm_list_Готов")],
+        [InlineKeyboardButton(text="⏳ Ожидает оплаты", callback_data="adm_list_Ожидает оплаты"),
+         InlineKeyboardButton(text="✅ Оплачено", callback_data="adm_list_Оплачено / Выполнено")]
+    ])
+    await message.answer("📊 Выберите статус заказов, которые хотите просмотреть:", reply_markup=markup)
+
+async def show_preview(message: Message, state: FSMContext):
+    await state.set_state(RepairOrder.preview_order)
+    data = await state.get_data()
+    
+    preview_text = (
+        f"📋 **Проверьте вашу заявку:**\n\n"
+        f"📍 Район: {data.get('district')}\n"
+        f"🏷 Марка: {data.get('brand')}\n"
+        f"⚠️ Проблема: {data.get('issue')}\n"
+        f"📞 Телефон: {data.get('contact')}\n"
+        f"📷 Фото: {'Прикреплено' if data.get('photo') else 'Не прикреплено'}\n\n"
+        f"Всё верно?"
+    )
+    
+    markup = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✅ Все верно / Отправить"), KeyboardButton(text="❌ Изменить данные")]
+        ],
+        resize_keyboard=True
+    )
+    
+    if data.get("photo"):
+        await message.answer_photo(photo=data.get("photo"), caption=preview_text, reply_markup=markup, parse_mode="Markdown")
+    else:
+        await message.answer(text=preview_text, reply_markup=markup, parse_mode="Markdown")
+
+async def publish_review_to_channel(message: Message, state: FSMContext):
+    data = await state.get_data()
+    order_id = data.get("review_order_id")
+    order = get_order_by_id(order_id)
+    
+    user = message.from_user
+    username_str = f"@{user.username}" if user.username else user.first_name
+    
+    brand = order[4] if order else "Не указана"
+    rating = data.get("rating")
+    review_text = data.get("review_text")
+    photo_id = data.get("review_photo")
+
+    channel_post = (
+        f"💬 **НОВЫЙ ОТЗЫВ О РАБОТЕ МАСТЕРА**\n\n"
+        f"👤 Клиент: {username_str}\n"
+        f"🏷 Техника: {brand}\n"
+        f"⭐ Оценка: {rating}\n\n"
+        f"📝 «{review_text}»\n\n"
+        f"🛠 Частный ремонт бытовой техники в Новосибирске"
+    )
+
+    kb = get_admin_keyboard() if user.id == ADMIN_ID else main_keyboard
+
+    try:
+        if photo_id:
+            await bot.send_photo(chat_id=CHANNEL_USERNAME, photo=photo_id, caption=channel_post, parse_mode="Markdown")
+        else:
+            await bot.send_message(chat_id=CHANNEL_USERNAME, text=channel_post, parse_mode="Markdown", disable_web_page_preview=True)
+        
+        await message.answer("🌟 **Спасибо большое за ваш отзыв!** Он успешно опубликован в нашем канале.", reply_markup=kb, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Failed to publish review to channel: {e}")
+        await message.answer("🌟 Спасибо за ваш отзыв!", reply_markup=kb)
+
+    await state.clear()
+
+
+# --- ВСЕ CALLBACK QUERIES ---
+
+@router.callback_query(F.data == "new_order_from_history")
+async def callback_new_order(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("Давайте оформим новую заявку.")
+    await start_order_by_callback(callback.message, state)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("start_review_"))
+async def review_start(callback: CallbackQuery, state: FSMContext):
+    order_id = callback.data.split("_")[2]
+    await state.update_data(review_order_id=order_id)
+    await state.set_state(ReviewState.waiting_for_rating)
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⭐", callback_data="rate_1"),
+            InlineKeyboardButton(text="⭐⭐", callback_data="rate_2"),
+            InlineKeyboardButton(text="⭐⭐⭐", callback_data="rate_3"),
+            InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data="rate_4"),
+            InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data="rate_5")
+        ]
+    ])
+    await callback.message.answer("Шаг 1 из 3: Пожалуйста, поставьте оценку от 1 до 5 звезд:", reply_markup=markup)
+    await callback.answer()
+
+@router.callback_query(ReviewState.waiting_for_rating, F.data.startswith("rate_"))
+async def review_receive_rating(callback: CallbackQuery, state: FSMContext):
+    rating_num = int(callback.data.split("_")[1])
+    stars = "⭐" * rating_num
+    await state.update_data(rating=stars)
+    await state.set_state(ReviewState.waiting_for_text)
+    
+    await callback.message.edit_text(f"Вы выбрали оценку: {stars}\n\nШаг 2 из 3: Напишите пару слов о проведенном ремонте:")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("warranty_claim_"))
+async def warranty_claim_callback(callback: CallbackQuery):
+    order_id = callback.data.split("_")[2]
+    order = get_order_by_id(order_id)
+    user = callback.from_user
+    
+    completed_date = order[12]
+    period = order[10]
+    rem_days, total_days = calculate_warranty_days(completed_date, period)
+
+    admin_claim_text = (
+        f"🚨 **ОБРАЩЕНИЕ ПО ГАРАНТИИ!**\n\n"
+        f"🆔 Заказ №{order_id}\n"
+        f"👤 Клиент: {user.first_name} (@{user.username if user.username else 'нет'})\n"
+        f"📞 Контакт: {order[7]}\n"
+        f"🏷 Марка: {order[4]}\n"
+        f"🔧 Выполненные ранее работы: {order[11]}\n"
+        f"🛡 Срок гарантии: {period} (Осталось дней: {rem_days} из {total_days})"
+    )
+    
+    confirm_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Подтвердить получение (связаться)", callback_data=f"confirm_claim_{order_id}_{user.id}")]
+    ])
+
+    try:
+        await bot.send_message(chat_id=ADMIN_ID, text=admin_claim_text, reply_markup=confirm_markup, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Failed to send warranty claim to admin: {e}")
+
+    await callback.message.edit_text(
+        text=callback.message.text + "\n\n⏳ **Запрос по гарантии отправлен мастеру!** Ожидайте, мастер свяжется с вами.",
+        parse_mode="Markdown"
+    )
+    await callback.answer("Запрос по гарантии отправлен!")
+
+@router.callback_query(F.data.startswith("confirm_claim_"))
+async def admin_confirm_claim(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    parts = callback.data.split("_")
+    order_id = parts[2]
+    user_id = int(parts[3])
+
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text=f"🟢 **Мастер успешно уведомлен о вашем обращении по гарантии (Заказ №{order_id})!**\nОн свяжется с вами в ближайшее время.",
+            parse_mode="Markdown"
+        )
+        await callback.message.edit_text(text=callback.message.text + "\n\n✅ Уведомление клиенту отправлено!")
+    except Exception as e:
+        await callback.message.answer(f"Не удалось отправить уведомление клиенту: {e}")
+
+    await callback.answer("Подтверждено!")
+
+@router.callback_query(F.data.startswith("adm_list_"))
+async def admin_show_status_list(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    status = callback.data.replace("adm_list_", "")
+    orders = get_orders_by_status(status)
+    
+    if not orders:
+        await callback.message.answer(f"📭 Нет заказов со статусом: *{status}*", parse_mode="Markdown")
+        await callback.answer()
+        return
+
+    await callback.message.answer(f"📋 **Список заказов со статусом: {status}**", parse_mode="Markdown")
+    for o in orders:
+        o_id, u_name, district, brand, issue, contact, price = o
+        text = (
+            f"🆔 **Заказ №{o_id}**\n"
+            f"👤 Клиент: {u_name} ({contact})\n"
+            f"📍 Район: {district}\n"
+            f"🏷 {brand} | ⚠️ {issue}\n"
+        )
+        markup = get_admin_order_markup(o_id, status)
+        await callback.message.answer(text, reply_markup=markup, parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("admin_view_warranty_"))
+async def admin_view_warranty(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    order_id = callback.data.split("_")[3]
+    order = get_order_by_id(order_id)
+    
+    completed_date = order[12] if order[12] else datetime.now().strftime("%Y-%m-%d")
+    period = order[10] if order[10] else "1 год"
+    rem_days, total_days = calculate_warranty_days(completed_date, period)
+
+    client_str = str(order[2]) + " (" + str(order[7]) + ")"
+    warranty_ticket = (
+        "📜 **ГАРАНТИЙНЫЙ ТАЛОН (Копия для мастера)**\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Заказ №: {order_id}\n"
+        f"Клиент: {client_str}\n"
+        f"Марка: {order[4]}\n"
+        f"Работы: {order[11]}\n"
+        f"Сумма: {order[9]} руб.\n"
+        f"📅 Дата выдачи: {completed_date}\n"
+        f"🛡 Срок гарантии: {period}\n"
+        f"⏳ **Осталось дней: {rem_days} из {total_days} дн.**\n"
+        f"Статус: {order[8]}\n"
+        "━━━━━━━━━━━━━━━━━━━━━"
+    )
+    await callback.message.answer(warranty_ticket, parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("status_"))
+async def change_status_callback(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    _, order_id, new_status = callback.data.split("_")
+    update_order_status(order_id, new_status)
+    
+    old_text = callback.message.caption if callback.message.photo else callback.message.text
+    base_text = old_text.split("📌 Статус:")[0].strip() if "📌 Статус:" in old_text else old_text.strip()
+    
+    new_admin_text = f"{base_text}\n\n📌 Статус: {new_status}"
+    admin_markup = get_admin_order_markup(order_id, new_status)
+
+    if callback.message.photo:
+        await callback.message.edit_caption(caption=new_admin_text, reply_markup=admin_markup)
+    else:
+        await callback.message.edit_text(text=new_admin_text, reply_markup=admin_markup)
+        
+    await callback.answer(f"Статус изменен на: {new_status}")
+
+@router.callback_query(F.data.startswith("fill_warranty_"))
+async def start_fill_warranty(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    order_id = callback.data.split("_")[2]
+    await state.update_data(warranty_order_id=order_id)
+    await state.set_state(AdminWarrantyFill.waiting_for_price)
+    await callback.message.answer(f"Заполнение гарантии для заказа №{order_id}.\nВведите итоговую стоимость ремонта (руб):")
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("pay_cash_"))
 async def client_chose_cash(callback: CallbackQuery):
@@ -945,6 +921,43 @@ async def admin_confirm_payment(callback: CallbackQuery):
         
     await callback.answer("Оплата подтверждена!")
 
+
+# --- ГЛОБАЛЬНЫЙ ХЕНДЛЕР МЕНЮ (СТАВИМ В САМЫЙ КОНЕЦ, ЧТОБЫ ОН НЕ ПЕРЕХВАТЫВАЛ FSM) ---
+
+@router.message()
+async def global_sub_check(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is not None:
+        return
+
+    if not await check_subscription(message.from_user.id):
+        await message.answer(
+            "⚠️ **Для использования бота необходима подписка на канал!**\n\n"
+            f"Пожалуйста, подпишитесь на [наш канал мастера]({CHANNEL_INVITE_LINK}), чтобы продолжить работу с ботом:",
+            reply_markup=get_sub_keyboard(),
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+        return
+
+    text = message.text
+    if text == "🔄 В начало":
+        await cmd_start(message, state)
+    elif text == "ℹ️ О нас":
+        await about_us(message)
+    elif text == "💰 Прайс":
+        await show_price(message)
+    elif text == "📜 Мои заказы":
+        await show_user_orders(message)
+    elif text == "📊 Управление заказами (Админ)":
+        await admin_orders_menu(message)
+    elif text == "🛠 Оставить заявку":
+        await start_order(message, state)
+    else:
+        kb = get_admin_keyboard() if message.from_user.id == ADMIN_ID else main_keyboard
+        await message.answer("Пожалуйста, воспользуйтесь кнопками меню:", reply_markup=kb)
+
+
 dp.include_router(router)
 
 async def handle(request):
@@ -963,11 +976,8 @@ async def start_web_server():
 async def main():
     logging.basicConfig(level=logging.INFO)
     await start_web_server()
-    
-    # Сбрасываем старые зависшие апдейты при старте
     await bot.delete_webhook(drop_pending_updates=True)
     logging.info("Starting polling...")
-    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
