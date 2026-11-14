@@ -667,20 +667,21 @@ async def show_preview(message: Message, state: FSMContext):
         await message.answer(text=preview_text, reply_markup=markup, parse_mode="Markdown")
 
 async def publish_review_to_channel(message: Message, state: FSMContext):
+    logging.info("[REVIEW] Начало публикации отзыва в канал...")
     data = await state.get_data()
     order_id = data.get("review_order_id")
-    order = get_order_by_id(order_id)
+    order = get_order_by_id(order_id) if order_id else None
     
     user = message.from_user
-    username_str = f"@{user.username}" if user.username else user.first_name
+    username_str = f"@{user.username}" if user.username else html.escape(user.first_name or "Клиент")
     
-    brand = order[4] if order else "Не указана"
-    rating = data.get("rating")
-    review_text = data.get("review_text")
+    brand = html.escape(order[4]) if (order and order[4]) else "Не указана"
+    rating = html.escape(data.get("rating") or "⭐⭐⭐⭐⭐")
+    review_text = html.escape(data.get("review_text") or "")
     photo_id = data.get("review_photo")
 
     channel_post = (
-        f"💬 **НОВЫЙ ОТЗЫВ О РАБОТЕ МАСТЕРА**\n\n"
+        f"💬 <b>НОВЫЙ ОТЗЫВ О РАБОТЕ МАСТЕРА</b>\n\n"
         f"👤 Клиент: {username_str}\n"
         f"🏷 Техника: {brand}\n"
         f"⭐ Оценка: {rating}\n\n"
@@ -690,18 +691,35 @@ async def publish_review_to_channel(message: Message, state: FSMContext):
 
     kb = get_admin_keyboard() if user.id == ADMIN_ID else main_keyboard
 
+    # Пробуем отправить и выведем ошибку прямо тебе в ЛС, если что-то не так
+    target_channel = -1004465523357  # Точный ID каналом числом
+
     try:
         if photo_id:
-            await bot.send_photo(chat_id=CHANNEL_USERNAME, photo=photo_id, caption=channel_post, parse_mode="Markdown")
+            await bot.send_photo(chat_id=target_channel, photo=photo_id, caption=channel_post, parse_mode="HTML")
         else:
-            await bot.send_message(chat_id=CHANNEL_USERNAME, text=channel_post, parse_mode="Markdown", disable_web_page_preview=True)
+            await bot.send_message(chat_id=target_channel, text=channel_post, parse_mode="HTML", disable_web_page_preview=True)
         
-        await message.answer("🌟 **Спасибо большое за ваш отзыв!** Он успешно опубликован в нашем канале.", reply_markup=kb, parse_mode="Markdown")
+        logging.info("[REVIEW] Отзыв успешно опубликован в канал!")
+        await message.answer("🌟 <b>Спасибо большое за ваш отзыв!</b> Он успешно опубликован в нашем канале.", reply_markup=kb, parse_mode="HTML")
     except Exception as e:
-        logging.error(f"Failed to publish review to channel: {e}")
+        err_msg = str(e)
+        logging.error(f"[REVIEW] Ошибка при публикации отзыва в канал: {err_msg}")
+        
+        # Отправляем тебе в личку точный текст ошибки от Telegram
+        try:
+            await bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"⚠️ <b>ОШИБКА ПУБЛИКАЦИИ В КАНАЛ:</b>\n<code>{html.escape(err_msg)}</code>",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+            
         await message.answer("🌟 Спасибо за ваш отзыв!", reply_markup=kb)
 
     await state.clear()
+
 
 
 # --- ВСЕ CALLBACK QUERIES ---
