@@ -136,7 +136,7 @@ async def check_subscription(user_id: int) -> bool:
         member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
         return member.status in ["creator", "administrator", "member"]
     except Exception:
-        return True  # Если бот не админ в канале, не блокируем клиента
+        return True
 
 # ================= START / MENU =================
 @router.message(CommandStart())
@@ -259,7 +259,6 @@ async def process_district(message: Message, state: FSMContext):
     kb = get_admin_keyboard() if user.id == ADMIN_ID else main_keyboard
     await message.answer(f"✅ <b>Заявка №{order_id} успешно оформлена!</b>\nМастер свяжется с вами в ближайшее время.", reply_markup=kb, parse_mode="HTML")
     
-    # Уведомление админу
     admin_text = (
         f"🚨 <b>НОВАЯ ЗАЯВКА №{order_id}</b>\n\n"
         f"👤 Клиент: {username} (ID: {user.id})\n"
@@ -452,7 +451,6 @@ async def admin_fill_ticket(callback: CallbackQuery):
     order_id = int(callback.data.split("_")[2])
     order = get_order_by_id(order_id)
     
-    # Пример заполнения талона мастером по умолчанию
     master_name = "Николай"
     cost = "2500"
     warranty_days = "365"
@@ -483,7 +481,6 @@ async def admin_fill_ticket(callback: CallbackQuery):
         [InlineKeyboardButton(text="⭐ Оценить работу мастера", callback_data=f"rate_{order_id}")]
     ])
 
-    # Отправляем талон клиенту
     try:
         await bot.send_message(order[1], ticket_text, parse_mode="HTML", reply_markup=ticket_kb)
     except Exception as e:
@@ -510,10 +507,8 @@ async def main():
     init_db()
     dp.include_router(router)
     
-    # Запускаем веб-сервер для keep-alive на Render в фоновом режиме
     asyncio.create_task(web_server())
     
-    # Запуск поллинга бота
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
