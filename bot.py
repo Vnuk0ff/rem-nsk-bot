@@ -16,7 +16,7 @@ from aiogram.fsm.context import FSMContext
 
 TOKEN = "9255429964:AAFUMdzsDqgJs4Ie6NEnQfTSR9VOffz-WG0"
 ADMIN_ID = 6684594078
-CHANNEL_USERNAME = -1004465523357
+CHANNEL_USERNAME = "@master_Vnukoff"
 CHANNEL_INVITE_LINK = "https://t.me/+HN5h7aaUEIc3YzQy"
 
 DB_NAME = "service_bot.db"
@@ -160,6 +160,7 @@ async def check_subscription(user_id: int) -> bool:
             return True
     except Exception as e:
         logging.error(f"Error checking subscription: {e}")
+        return True
     return False
 
 def get_sub_keyboard():
